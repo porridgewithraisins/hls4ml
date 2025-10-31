@@ -706,6 +706,39 @@ class Conv2DBatchnorm(Conv2D):
             self.weights['bias'].data = bias_q(folded_bias)
 
 
+class Conv2DTranspose(Layer):
+    """Transposed convolution layer (sometimes called Deconvolution).
+    This is the reverse operation of conv2d.
+    """
+
+    _expected_attributes = [
+        Attribute('in_height'),
+        Attribute('in_width'),
+        Attribute('out_height'),
+        Attribute('out_width'),
+        Attribute('n_chan'),
+        Attribute('n_filt'),
+        Attribute('filt_height'),
+        Attribute('filt_width'),
+        Attribute('stride_height'),
+        Attribute('stride_width'),
+        Attribute('pad_top'),
+        Attribute('pad_bottom'),
+        Attribute('pad_left'),
+        Attribute('pad_right'),
+        WeightAttribute('weight'),
+        WeightAttribute('bias'),
+        TypeAttribute('weight'),
+        TypeAttribute('bias'),
+    ]
+
+    def initialize(self):
+        shape = [self.attributes['out_height'], self.attributes['out_width'], self.attributes['n_filt']]
+        self.add_output_variable(shape)
+        self.add_weights(quantizer=self.get_attr('weight_quantizer'))
+        self.add_bias(quantizer=self.get_attr('bias_quantizer'))
+
+
 class SeparableConv2D(Layer):
     _expected_attributes = [
         Attribute('in_height'),
@@ -1801,6 +1834,7 @@ layer_map = {
     'BinaryConv2D': Conv2D,
     'QConv2D': Conv2D,
     'QConv2DBatchnorm': Conv2DBatchnorm,
+    'Conv2DTranspose': Conv2DTranspose,
     'SeparableConv1D': SeparableConv1D,
     'QSeparableConv1D': SeparableConv1D,
     'DepthwiseConv1D': DepthwiseConv1D,

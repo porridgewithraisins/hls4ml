@@ -4,6 +4,7 @@ from hls4ml.model.layers import (
     Conv1D,
     Conv2D,
     Conv2DBatchnorm,
+    Conv2DTranspose,
     DepthwiseConv1D,
     DepthwiseConv2D,
     SeparableConv1D,
@@ -662,5 +663,91 @@ class SeparableConv2DFunctionTemplate(FunctionCallTemplate):
         params['p'] = node.get_weights('pointwise').name
         params['b'] = node.get_weights('bias').name
         params['z'] = node.get_weights('zero_bias').name
+
+        return self.template.format(**params)
+
+# Conv2DTranspose Templates
+
+conv2dtranspose_config_template = """struct config{index} : nnet::conv2d_config {{
+    static const unsigned pad_top = {pad_top};
+    static const unsigned pad_bottom = {pad_bottom};
+    static const unsigned pad_left = {pad_left};
+    static const unsigned pad_right = {pad_right};
+    static const unsigned in_height = {in_height};
+    static const unsigned in_width = {in_width};
+    static const unsigned n_chan = {n_chan};
+    static const unsigned filt_height = {filt_height};
+    static const unsigned filt_width = {filt_width};
+    static const unsigned kernel_size = filt_height * filt_width;
+    static const unsigned n_filt = {n_filt};
+    static const unsigned stride_height = {stride_height};
+    static const unsigned stride_width = {stride_width};
+    static const unsigned out_height = {out_height};
+    static const unsigned out_width = {out_width};
+    static const unsigned reuse_factor = {reuse};
+    static const unsigned n_zeros = {nzeros};
+    static const bool store_weights_in_bram = false;
+    static const unsigned strategy = nnet::{strategy};
+    static const nnet::conv_implementation implementation = nnet::conv_implementation::{implementation};
+    typedef {accum_t.name} accum_t;
+    typedef {bias_t.name} bias_t;
+    typedef {weight_t.name} weight_t;
+    typedef {config_t} mult_config;
+}};\n"""
+
+conv2dtranspose_function_template = (
+    '// Conv2DTranspose not yet fully implemented - placeholder\n'
+    '// nnet::conv_2d_transpose_{data_format}<{input_t}, {output_t}, {config}>({input}, {output}, {w}, {b});'
+)
+
+conv2dtranspose_include_list = ['nnet_utils/nnet_conv2d.h']
+
+
+class Conv2DTransposeConfigTemplate(LayerConfigTemplate):
+    def __init__(self):
+        super().__init__(Conv2DTranspose)
+        self.template = conv2dtranspose_config_template
+        self.mult_template = conv_mult_config_template
+
+    def format(self, node):
+        params = self._default_config_params(node)
+        params['nzeros'] = node.get_weights('weight').nzeros
+        params['config_t'] = f'config{node.index}_mult'
+
+        conv_config = self.template.format(**params)
+
+        # Mult config for the convolution
+        mult_params = self._default_config_params(node)
+        mult_params['n_in'] = node.get_attr('filt_height') * node.get_attr('filt_width') * node.get_attr('n_chan')
+        mult_params['n_out'] = node.get_attr('n_filt')
+        mult_params['nzeros'] = node.get_weights('weight').nzeros
+        mult_params['product_type'] = get_backend('vivado').product_type(
+            node.get_input_variable().type.precision, node.get_weights('weight').type.precision
+        )
+
+        # Add dense_function parameter based on strategy
+        if node.get_attr('strategy').lower() == 'latency':
+            mult_params['dense_function'] = 'nnet::DenseLatency'
+        else:  # resource strategy
+            if int(mult_params['reuse_factor']) <= int(mult_params['n_in']):
+                mult_params['dense_function'] = 'nnet::DenseResource_rf_leq_nin'
+            else:
+                mult_params['dense_function'] = 'nnet::DenseResource_rf_gt_nin'
+
+        mult_config = self.mult_template.format(**mult_params)
+
+        return mult_config + '\n' + conv_config
+
+
+class Conv2DTransposeFunctionTemplate(FunctionCallTemplate):
+    def __init__(self):
+        super().__init__(Conv2DTranspose, include_header=conv2dtranspose_include_list)
+        self.template = conv2dtranspose_function_template
+
+    def format(self, node):
+        params = self._default_function_params(node)
+        params['data_format'] = 'cf' if node.get_attr('data_format') == 'channels_first' else 'cl'
+        params['w'] = node.get_weights('weight').name
+        params['b'] = node.get_weights('bias').name
 
         return self.template.format(**params)
