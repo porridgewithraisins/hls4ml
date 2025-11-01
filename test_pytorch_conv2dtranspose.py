@@ -62,7 +62,7 @@ if __name__ == "__main__":
     hls_model = convert_from_pytorch_model(
         model,
         output_dir="hls4ml_prj",
-        backend="Vivado",
+        backend="oneAPI",
         hls_config=config,
     )
 

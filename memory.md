@@ -257,9 +257,11 @@ hls4ml_prj/
 
 ## Next Steps
 
-1. Profile resource usage and latency in `hls4ml_prj/firmware/myproject.cpp`; explore loop tiling/unrolling tweaks.
-2. Evaluate wider fixed-point or mixed precision via `HLSConfig['Model']['Precision']` overrides before synthesis.
-3. Add regression tests that cover multi-channel stress cases (`test_pytorch_conv2dtranspose.py`) to guard against layout regressions.
+We now have the Intel oneAPI Base Toolkit on PATH for this repo (via direnv), so the oneAPI backend builds are unblocked even though the FPGA Add-On is not installed yet. Outstanding work:
+
+1. Run the Conv2DTranspose regression through the oneAPI C-simulation flow once `icpx` is verified in the environment.
+2. After installing the FPGA Add-On, generate the full synthesis report to capture latency and resource metrics for the Intel flow.
+3. Iterate on optimization knobs (reuse, IOType, precision) using the oneAPI project as the baseline while keeping the Vivado parity tests in place.
 
 ## Data Layout Lessons
 

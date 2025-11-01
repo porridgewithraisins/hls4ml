@@ -1,7 +1,7 @@
 from hls4ml.backends.backend import get_backend
 from hls4ml.backends.oneapi.oneapi_template import StreamFunctionCallTemplate, TaskSequenceTemplate
 from hls4ml.backends.template import FunctionCallTemplate, LayerConfigTemplate
-from hls4ml.model.layers import Conv1D, Conv2D, Conv2DBatchnorm, DepthwiseConv1D, DepthwiseConv2D
+from hls4ml.model.layers import Conv1D, Conv2D, Conv2DBatchnorm, Conv2DTranspose, DepthwiseConv1D, DepthwiseConv2D
 
 # TODO - Dilation rate ?
 
@@ -198,6 +198,75 @@ conv2d_task_sequence_template = (
 conv2d_include_list = ['nnet_utils/nnet_conv2d.h', 'nnet_utils/nnet_conv2d_stream.h']
 
 
+conv2dtranspose_config_template = """struct config{index} : nnet::conv2d_config {{
+    static const unsigned in_height = {in_height};
+    static const unsigned in_width = {in_width};
+    static const unsigned n_chan = {n_chan};
+
+    static const unsigned out_height = {out_height};
+    static const unsigned out_width = {out_width};
+
+    static const unsigned n_filt = {n_filt};
+    static const unsigned filt_height = {filt_height};
+    static const unsigned filt_width = {filt_width};
+    static const unsigned kernel_size = filt_height * filt_width;
+
+    static const unsigned pad_top = {pad_top};
+    static const unsigned pad_bottom = {pad_bottom};
+    static const unsigned pad_left = {pad_left};
+    static const unsigned pad_right = {pad_right};
+    static const unsigned stride_height = {stride_height};
+    static const unsigned stride_width = {stride_width};
+
+    static const unsigned reuse_factor = {reuse};
+    static const unsigned parallelization_factor = {parallelization};
+    static const bool store_weights_in_bram = false;
+
+    typedef {accum_t.name} accum_t;
+    typedef {bias_t.name} bias_t;
+    typedef {weight_t.name} weight_t;
+    typedef {config_t} mult_config;
+}};\n"""
+
+conv2dtranspose_function_template = """
+    // Conv2DTranspose implementation operating on channels_last buffers
+    for(int oh = 0; oh < {config}::out_height; oh++) {{
+        for(int ow = 0; ow < {config}::out_width; ow++) {{
+            for(int ff = 0; ff < {config}::n_filt; ff++) {{
+                int out_idx = oh * {config}::out_width * {config}::n_filt + ow * {config}::n_filt + ff;
+                {output}[out_idx] = {b}[ff];
+            }}
+        }}
+    }}
+
+    for(int ih = 0; ih < {config}::in_height; ih++) {{
+        for(int iw = 0; iw < {config}::in_width; iw++) {{
+            for(int cc = 0; cc < {config}::n_chan; cc++) {{
+                int in_idx = (ih * {config}::in_width + iw) * {config}::n_chan + cc;
+                typename {config}::accum_t in_val = {input}[in_idx];
+
+                for(int fh = 0; fh < {config}::filt_height; fh++) {{
+                    for(int fw = 0; fw < {config}::filt_width; fw++) {{
+                        int oh = ih * {config}::stride_height + fh - {config}::pad_top;
+                        int ow = iw * {config}::stride_width + fw - {config}::pad_left;
+
+                        if(oh >= 0 && oh < {config}::out_height && ow >= 0 && ow < {config}::out_width) {{
+                            for(int ff = 0; ff < {config}::n_filt; ff++) {{
+                                int w_idx = ((((fh * {config}::filt_width) + fw) * {config}::n_filt) + ff) * {config}::n_chan + cc;
+                                int out_idx = oh * {config}::out_width * {config}::n_filt + ow * {config}::n_filt + ff;
+                                {output}[out_idx] += in_val * {w}[w_idx];
+                            }}
+                        }}
+                    }}
+                }}
+            }}
+        }}
+    }}
+"""
+
+conv2dtranspose_include_list = ['nnet_utils/nnet_conv2d.h']
+
+
 class Conv2DConfigTemplate(LayerConfigTemplate):
     def __init__(self):
         super().__init__((Conv2D, Conv2DBatchnorm, DepthwiseConv2D))
@@ -267,3 +336,41 @@ class DepthwiseConv2DFunctionTemplate(Conv2DFunctionTemplate):
     def __init__(self):
         super(Conv2DFunctionTemplate, self).__init__(DepthwiseConv2D, include_header=depthconv2d_include_list)
         self.template = depthconv2d_function_template
+
+
+class Conv2DTransposeConfigTemplate(LayerConfigTemplate):
+    def __init__(self):
+        super().__init__(Conv2DTranspose)
+        self.template = conv2dtranspose_config_template
+        self.mult_template = conv_mult_config_template
+
+    def format(self, node):
+        conv_params = self._default_config_params(node)
+        conv_params['parallelization'] = node.get_attr('parallelization', 1)
+        conv_params['config_t'] = f'config{node.index}_mult'
+        conv_config = self.template.format(**conv_params)
+
+        mult_params = self._default_config_params(node)
+        mult_params['n_in'] = node.get_attr('filt_height') * node.get_attr('filt_width') * node.get_attr('n_chan')
+        mult_params['n_out'] = node.get_attr('n_filt')
+        mult_params['rfpad'] = node.get_attr('rfpad', 0)
+        mult_params['bfpad'] = node.get_attr('bfpad', 0)
+        mult_params['product_type'] = get_backend('oneAPI').product_type(
+            node.get_input_variable().type.precision, node.get_weights('weight').type.precision
+        )
+        mult_config = self.mult_template.format(**mult_params)
+
+        return mult_config + '\n' + conv_config
+
+
+class Conv2DTransposeFunctionTemplate(FunctionCallTemplate):
+    def __init__(self):
+        super().__init__(Conv2DTranspose, include_header=conv2dtranspose_include_list)
+        self.template = conv2dtranspose_function_template
+
+    def format(self, node):
+        params = self._default_function_params(node)
+        params['w'] = node.get_weights('weight').name
+        params['b'] = node.get_weights('bias').name
+
+        return self.template.format(**params)
