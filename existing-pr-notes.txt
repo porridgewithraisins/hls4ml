@@ -1,0 +1,50 @@
+Why do we need multidimensional weights here? Passing pointers doesn't work as expected? I like the idea, we'll need it in the future for Vitis, but the keep_dims approach feels very clunky.
+
+
+@vloncar I think the "need" for the multidimensional weights comes from this transpose. I think this can still be done even if all the weights are kept single dimensional, but maybe it's less "clean" or "obvious" what's going on?
+
+maybe @Jonathan-Shoemaker can also comment more.
+
+What is the meaning of "keep_dims"?
+
+keep_dims keeps the weight matrix from being entirely flattened, keeping the first "keep_dims" dimensions as is, flattening along all other dimensions.
+
+The reason for this is that the ConvTranspose is computed as the interleaving of "stride" number of Conv layers. The dimensions kept are for indexing into these different Conv layers. The idea was that the weight matrix of a ConvTranspose layer can be thought of as a disjoint set of weight matrices for Conv layers and treating it as such was easier.
+
+
+
+You want to essentially consistently use disjoint submatrices of the weight matrix for sub-computations, and interleave the results from these sub-computations. My understanding is the alternative would be to pass large slices of the matrix. I can't remember if I tested this, but assume it would work, I think I just found it messier.
+
+
+
+Looking at the new test, the results see to be:
+
+y_keras.shape=(10, 7, 7, 4)
+y_hls4ml.shape=(10, 100)
+and model_default_t w2[1][1][108]; seem to be the weight dimensions. Will need to investigate further.
+
+
+
+
+The output dimensions inconsistency is for padding = "valid". For "same" the output is flattened but there are the correct number of values. However, they still don't match.
+
+
+
+I am having trouble getting this to work. I wrote a python implementation of conv2d_transpose that works and I think I understand the im2col style io_parallel implementation that's here, but it's not coming together. The keep_dim weights that are written out actually look strangely reordered. I may branch and try to use the code here while dropping the keep_dim concept.
+
+
+One of the purposes of keep_dims is that the weights are purposefully written in a different order than in the original order of the conv_transpose weight matrix. Purpose of this is that the kernel of conv transpose is better computed as separate kernels of smaller conv layers. These kernels are within the transpose kernel but are not continuous in the normal transpose matrix output.
+
+
+With these few changes conv2dtranspose seems to work for io_parallel. @Jonathan-Shoemaker, do you want to take a look at why the other cases in the pytest are failing?
+
+
+
+Actually, the conv1dtranspose io_parallel test was due to the pytest being misconfigured, but the io_stream tests are still failing.
+
+
+
+I think the issue is with padding. With padding="same" it seems to work well.
+
+
+Also needed is checking for valid reuse factors for conv transpose.
