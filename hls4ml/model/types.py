@@ -708,6 +708,16 @@ class WeightVariable(Variable):
 
     def update_precision(self, new_precision):
         self.type.precision = new_precision
+        whichtypedebug = {
+            'UnspecifiedPrecisionType': isinstance(new_precision, UnspecifiedPrecisionType),
+            'IntegerPrecisionType': isinstance(new_precision, IntegerPrecisionType),
+            'XnorPrecisionType': isinstance(new_precision, XnorPrecisionType),
+            'FixedPrecisionType': isinstance(new_precision, FixedPrecisionType),
+            'ExponentPrecisionType': isinstance(new_precision, ExponentPrecisionType),
+            'FloatPrecisionType': isinstance(new_precision, FloatPrecisionType),
+            'StandardFloatPrecisionType': isinstance(new_precision, StandardFloatPrecisionType),
+        }
+        print("DEBUG: update_precision for ", new_precision ,"called with new_precision type checks:", whichtypedebug)
         if isinstance(new_precision, UnspecifiedPrecisionType):
             self.precision_fmt = ''  # Temporarily set precision to undefined value
         elif isinstance(new_precision, (IntegerPrecisionType, XnorPrecisionType, ExponentPrecisionType)):

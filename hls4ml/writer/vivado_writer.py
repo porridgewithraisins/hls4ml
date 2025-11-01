@@ -52,8 +52,19 @@ class VivadoWriter(Writer):
 
         # fill c++ array.
         # not including internal brackets for multidimensional case
+        print(f"DEBUG: Writing {var.name}")
+        print(f"  var.data shape: {var.data.shape if hasattr(var.data, 'shape') else 'no shape'}")
+        print(f"  var.data first 3 values: {var.data.flatten()[:3] if hasattr(var.data, 'flatten') else var.data[:3]}")
+        print(
+            f"  var.data_unquantized shape: {var.data_unquantized.shape if hasattr(var.data_unquantized, 'shape') else 'no shape'}"
+        )
+        print(
+            f"  var.data_unquantized first 3: {var.data_unquantized.flatten()[:3] if hasattr(var.data_unquantized, 'flatten') else var.data_unquantized[:3]}"
+        )
         sep = ''
-        for x in var:
+        for idx, x in enumerate(var):
+            if idx < 3:
+                print(f"  Iterator [{idx}] = '{x}'")
             h_file.write(sep + x)
             if write_txt_file:
                 txt_file.write(sep + x)

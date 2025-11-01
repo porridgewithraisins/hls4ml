@@ -26,23 +26,18 @@ def parse_conv2dtranspose_layer(operation, layer_name, input_names, input_shapes
     layer['name'] = layer_name
     layer['inputs'] = input_names
     layer['class_name'] = 'Conv2DTranspose'
-    layer['data_format'] = 'channels_last'  # We'll convert from PyTorch's channels_first
+    layer['data_format'] = 'channels_first'  # Pytorch default, like Conv2D
 
-    # Get weights and biases - need to transpose from PyTorch's format
-    weights = class_object.weight.data.numpy()
-    # PyTorch Conv2DTranspose weight format: (in_channels, out_channels, height, width)
-    # We need: (height, width, in_channels, out_channels)
-    layer['weight_data'] = weights.transpose(2, 3, 0, 1)
+    # Get weights and biases - keep PyTorch's format
+    layer['weight_data'] = class_object.weight.data.numpy()
 
     if class_object.bias is not None:
         layer['bias_data'] = class_object.bias.data.numpy()
     else:
         layer['bias_data'] = None
 
-    # Input info - converting from channels_first to channels_last
-    (*_, in_height, in_width, layer['n_chan']) = parse_data_format(input_shapes[0], 'channels_first')
-    layer['in_height'] = in_height
-    layer['in_width'] = in_width
+    # Input info
+    (*_, layer['in_height'], layer['in_width'], layer['n_chan']) = parse_data_format(input_shapes[0], 'channels_first')
 
     # Layer parameters
     layer['n_filt'] = class_object.out_channels

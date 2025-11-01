@@ -695,10 +695,46 @@ conv2dtranspose_config_template = """struct config{index} : nnet::conv2d_config 
 }};\n"""
 
 conv2dtranspose_function_template = """
-    // Conv2DTranspose - minimal working implementation (zeros output for now)
-    for(int i = 0; i < {config}::out_height * {config}::out_width * {config}::n_filt; i++) {{
-        #pragma HLS UNROLL
-        {output}[i] = 0;
+    // Conv2DTranspose - simple naive implementation (channels_last format)
+    // Initialize output with biases
+    for(int oh = 0; oh < {config}::out_height; oh++) {{
+        for(int ow = 0; ow < {config}::out_width; ow++) {{
+            for(int ff = 0; ff < {config}::n_filt; ff++) {{
+                int out_idx = (oh * {config}::out_width + ow) * {config}::n_filt + ff;
+                {output}[out_idx] = {b}[ff];
+            }}
+        }}
+    }}
+    
+    // Compute transposed convolution
+    // For each input position
+    for(int ih = 0; ih < {config}::in_height; ih++) {{
+        for(int iw = 0; iw < {config}::in_width; iw++) {{
+            for(int cc = 0; cc < {config}::n_chan; cc++) {{
+                int in_idx = (ih * {config}::in_width + iw) * {config}::n_chan + cc;
+                typename {config}::accum_t in_val = {input}[in_idx];
+                
+                // For each filter position, scatter to output
+                for(int fh = 0; fh < {config}::filt_height; fh++) {{
+                    for(int fw = 0; fw < {config}::filt_width; fw++) {{
+                        // Calculate output position
+                        int oh = ih * {config}::stride_height + fh - {config}::pad_top;
+                        int ow = iw * {config}::stride_width + fw - {config}::pad_left;
+                        
+                        // Check if output position is valid
+                        if(oh >= 0 && oh < {config}::out_height && ow >= 0 && ow < {config}::out_width) {{
+                            for(int ff = 0; ff < {config}::n_filt; ff++) {{
+                                // Weight index: [fh][fw][cc][ff] in channels_last
+                                int w_idx = ((fh * {config}::filt_width + fw) * {config}::n_chan + cc) * {config}::n_filt + ff;
+                                int out_idx = (oh * {config}::out_width + ow) * {config}::n_filt + ff;
+                                
+                                {output}[out_idx] += in_val * {w}[w_idx];
+                            }}
+                        }}
+                    }}
+                }}
+            }}
+        }}
     }}
 """
 
