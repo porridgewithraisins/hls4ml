@@ -695,22 +695,23 @@ conv2dtranspose_config_template = """struct config{index} : nnet::conv2d_config 
 }};\n"""
 
 conv2dtranspose_function_template = """
-    // Conv2DTranspose - simple naive implementation (channels_last format)
-    // Initialize output with biases
+    // Conv2DTranspose implementation (channels_first format)
+    // Initialize output with biases (channels_last format)
     for(int oh = 0; oh < {config}::out_height; oh++) {{
         for(int ow = 0; ow < {config}::out_width; ow++) {{
             for(int ff = 0; ff < {config}::n_filt; ff++) {{
-                int out_idx = (oh * {config}::out_width + ow) * {config}::n_filt + ff;
+                int out_idx = oh * {config}::out_width * {config}::n_filt + ow * {config}::n_filt + ff;
                 {output}[out_idx] = {b}[ff];
             }}
         }}
     }}
     
-    // Compute transposed convolution
+    // Compute transposed convolution (input/output in channels_last format)
     // For each input position
     for(int ih = 0; ih < {config}::in_height; ih++) {{
         for(int iw = 0; iw < {config}::in_width; iw++) {{
             for(int cc = 0; cc < {config}::n_chan; cc++) {{
+                // Input index in channels_last: [ih][iw][cc]
                 int in_idx = (ih * {config}::in_width + iw) * {config}::n_chan + cc;
                 typename {config}::accum_t in_val = {input}[in_idx];
                 
@@ -724,9 +725,10 @@ conv2dtranspose_function_template = """
                         // Check if output position is valid
                         if(oh >= 0 && oh < {config}::out_height && ow >= 0 && ow < {config}::out_width) {{
                             for(int ff = 0; ff < {config}::n_filt; ff++) {{
-                                // Weight index: [fh][fw][cc][ff] in channels_last
-                                int w_idx = ((fh * {config}::filt_width + fw) * {config}::n_chan + cc) * {config}::n_filt + ff;
-                                int out_idx = (oh * {config}::out_width + ow) * {config}::n_filt + ff;
+                                // Weight index layout: [fh][fw][ff][cc]
+                                int w_idx = ((((fh * {config}::filt_width) + fw) * {config}::n_filt) + ff) * {config}::n_chan + cc;
+                                // Output index in channels_last: [oh][ow][ff]
+                                int out_idx = oh * {config}::out_width * {config}::n_filt + ow * {config}::n_filt + ff;
                                 
                                 {output}[out_idx] += in_val * {w}[w_idx];
                             }}

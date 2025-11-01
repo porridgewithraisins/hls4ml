@@ -557,6 +557,10 @@ class VivadoWriter(Writer):
             model (ModelGraph): the hls4ml model.
         """
 
+        print("DEBUGG", model.config.get_config_value('InputData'))
+        print("DEBUGG", model.config.get_config_value('OutputPredictions'))
+        print("DEBUGG", model.config)
+
         filedir = os.path.dirname(os.path.abspath(__file__))
 
         if not os.path.exists(f'{model.config.get_output_dir()}/tb_data/'):
