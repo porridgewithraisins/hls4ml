@@ -217,6 +217,54 @@ hls4ml_prj/
 └── vivado_synth.tcl
 ```
 
+In oneAPI case, it is
+
+hls4ml_prj
+├── build
+│   ├── myproject.fpga_emu # csim executable
+│   └── myproject.report.prj
+│       ├── board_spec.xml
+│       ├── include
+│       ├── ip
+│       ├── ip_include.tcl
+│       ├── ipinterfaces.xml
+│       ├── kernel_hdl
+│       ├── kernel_list_file.txt
+│       ├── kernel_system_import.tcl
+│       ├── kernel_system.qip
+│       ├── kernel_system.sv
+│       ├── kernel_system.tcl
+│       ├── logs
+│       ├── Myproject_interface_structs.sv
+│       ├── myproject_report.bc.xml
+│       ├── myproject_report_di_hw.tcl
+│       ├── myproject_report_di_inst.sv
+│       ├── myproject_report_di.sv
+│       ├── myproject_report_sys_hw.tcl
+│       ├── myproject_report_sys.sv
+│       ├── opencl.ipx
+│       ├── reports # contains reports
+│       ├── sim
+│       └── sys_description.txt
+├── src
+│   ├── exception_handler.hpp
+│   ├── firmware
+│   │   ├── defines.h
+│   │   ├── myproject.cpp # implementation
+│   │   ├── myproject.h
+│   │   ├── nnet_utils
+│   │   ├── parameters.h
+│   │   └── weights # contains the weights
+│   ├── myproject_bridge.cpp
+│   └── myproject_test.cpp # test bench for csim
+└── tb_data
+    ├── results.log
+    ├── tb_input_features.dat
+    └── tb_output_predictions.dat
+
+28 directories, 43 files
+
+
 ## Key Discoveries & Solutions
 
 1. **Weight Precision Issue**
@@ -263,11 +311,11 @@ We now have the Intel oneAPI Base Toolkit on PATH for this repo (via direnv) and
 > mkdir build && cd build && cmake -DUSER_INCLUDE_PATHS=/opt/intel/oneapi/compiler/2025.0/opt/oclfpga/include/ ..
 
 - ✅ `make fpga_emu` runs cleanly; emulator outputs match PyTorch (`MAE≈5.1e-3`, `MSE≈3.9e-5`, `MaxAbs≈1.9e-2`).
-- ✅ `make report` succeeds; baseline Agilex7 estimates show ~326k ALUTs (34%), ~423k FFs (22%), 0 DSPs, and 3.8k MLABs. Inner accumulation loop limits the II to 3 because of 11.5k-bit shifts.
+- ✅ `make report` succeeds; baseline Agilex7 estimates show ~326k ALUTs (34%), ~423k FFs (22%), 0 DSPs, and 3.8k MLABs. Inner accumulation loop limits the II to 3 because of 11.5k-bit shifts. The reports live in the build directory's myproject.report.prj/reports directory. In there you can read either the report.html, or the structured json in resources/json/*. Particularly summary.ndjson.
 
 Outstanding work:
 
-1. Iterate on optimization knobs (reuse, IOType, precision) using the oneAPI project as the baseline while keeping the Vivado parity tests in place.
+1. Iterate on optimization knobs (reuse, IOType, precision) using the oneAPI project as the baseline while keeping the parity tests in place.
 
 ## Data Layout Lessons
 
@@ -287,6 +335,19 @@ Outstanding work:
 - **Verification harness:** Maintain `test_pytorch_conv2dtranspose.py` as a regression across knob combinations (reuse sweep, precision variants, io_parallel vs io_stream) so any template tweak still matches PyTorch within quantization tolerance.
 
 We will be using the oneAPI backend exclusively going forward.
+
+### 2025-11-03 – oneAPI Conv2DTranspose accumulator fix
+
+- Converted the Conv2DTranspose template to accumulate per output pixel using a small local buffer; this removed the 11.5k-bit scatter shift register and cut Agilex7 ALUT usage from ~206k to ~64.6k while lowering FF count to ~167k.
+- Ensured all MAC paths cast to the layer’s `output_elem_t` so the emulator MAE returned to ≈5.1e-3 (matching the pre-optimization baseline) with MSE ≈3.9e-5 and MaxAbs ≈1.9e-2.
+- Verified the optimized kernel through `./iterate.sh --agent`; both fpga_emu and report builds succeed with the improved resource profile.
+- Next up: surface reuse/parallelization/IO knobs in the template and add regression sweeps so users can choose between latency and area trade-offs without regressing accuracy.
+
+## TODO: Next optimization
+
+- Evaluate remaining resource gap versus Conv2D by inspecting the output scatter loop. Current design keeps `parallelization_factor` MAC lanes alive at once, so each output pixel holds a `n_filt`-wide accumulator. Explore time-multiplexing filters (higher reuse factor) to shrink the local accumulator array or serialize writes when users request `Strategy='Resource'`.
+- Mirror Conv2D’s knob handling: honor `ReuseFactor`, `Strategy`, `io_type`, and `implementation` in the config generator, then gate pragmas accordingly (e.g. skip `#pragma unroll pfc` when reuse > 1, emit DATAFLOW wrappers for `io_stream`).
+- Build a regression sweep in `test_pytorch_conv2dtranspose.py` that iterates over representative knob combinations, regenerates the project, and asserts MAE stays within ±1e-2 while reporting resource deltas.
 
 ## oneAPI Backend Build Flow
 

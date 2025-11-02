@@ -230,42 +230,64 @@ conv2dtranspose_config_template = """struct config{index} : nnet::conv2d_config 
 
 conv2dtranspose_function_template = """
     // Conv2DTranspose implementation operating on channels_last buffers
-    // Initialize output with bias - full unroll is safe for small copy loop
-    #pragma unroll
-    for(int out_idx = 0; out_idx < {config}::out_height * {config}::out_width * {config}::n_filt; out_idx++) {{
-        int ff = out_idx % {config}::n_filt;
-        {output}[out_idx] = {b}[ff];
-    }}
-
-    // Main computation loops - use selective unrolling via parallelization_factor
-    // Compute unroll factors similar to Conv2D im2col pattern
+    // Accumulate one output pixel at a time to avoid wide shift registers
+    using output_elem_t = typename {output_t}::value_type;
     constexpr int pfc = ({config}::n_filt > {config}::parallelization_factor) ? {config}::parallelization_factor : {config}::n_filt;
-    
-    for(int ih = 0; ih < {config}::in_height; ih++) {{
-        for(int iw = 0; iw < {config}::in_width; iw++) {{
-            for(int cc = 0; cc < {config}::n_chan; cc++) {{
-                int in_idx = (ih * {config}::in_width + iw) * {config}::n_chan + cc;
-                // Register input value to reduce repeated memory access
-                [[intel::fpga_register]] typename {config}::accum_t in_val = {input}[in_idx];
 
-                for(int fh = 0; fh < {config}::filt_height; fh++) {{
-                    // Add initiation interval constraint based on reuse_factor
+    for(int oh = 0; oh < {config}::out_height; oh++) {{
+        for(int ow = 0; ow < {config}::out_width; ow++) {{
+            output_elem_t acc[{config}::n_filt];
+
+            // Initialise local accumulators from bias
+            #pragma unroll
+            for(int ff = 0; ff < {config}::n_filt; ff++) {{
+                acc[ff] = static_cast<output_elem_t>({b}[ff]);
+            }}
+
+            for(int fh = 0; fh < {config}::filt_height; fh++) {{
+                int ih_raw = oh + {config}::pad_top - fh;
+                bool row_in_range = (ih_raw >= 0) && ((ih_raw % {config}::stride_height) == 0);
+                int ih = 0;
+                if(row_in_range) {{
+                    ih = ih_raw / {config}::stride_height;
+                    row_in_range = ih < {config}::in_height;
+                }}
+                if(!row_in_range) {{
+                    continue;
+                }}
+
+                for(int fw = 0; fw < {config}::filt_width; fw++) {{
+                    int iw_raw = ow + {config}::pad_left - fw;
+                    bool col_in_range = (iw_raw >= 0) && ((iw_raw % {config}::stride_width) == 0);
+                    int iw = 0;
+                    if(col_in_range) {{
+                        iw = iw_raw / {config}::stride_width;
+                        col_in_range = iw < {config}::in_width;
+                    }}
+                    if(!col_in_range) {{
+                        continue;
+                    }}
+
+                    int in_base = (ih * {config}::in_width + iw) * {config}::n_chan;
+
                     [[intel::initiation_interval({config}::reuse_factor)]]
-                    for(int fw = 0; fw < {config}::filt_width; fw++) {{
-                        int oh = ih * {config}::stride_height + fh - {config}::pad_top;
-                        int ow = iw * {config}::stride_width + fw - {config}::pad_left;
+                    for(int cc = 0; cc < {config}::n_chan; cc++) {{
+                        output_elem_t in_val = static_cast<output_elem_t>({input}[in_base + cc]);
 
-                        if(oh >= 0 && oh < {config}::out_height && ow >= 0 && ow < {config}::out_width) {{
-                            // Controlled unrolling on output filters
-                            #pragma unroll pfc
-                            for(int ff = 0; ff < {config}::n_filt; ff++) {{
-                                int w_idx = ((((fh * {config}::filt_width) + fw) * {config}::n_filt) + ff) * {config}::n_chan + cc;
-                                int out_idx = oh * {config}::out_width * {config}::n_filt + ow * {config}::n_filt + ff;
-                                {output}[out_idx] += in_val * {w}[w_idx];
-                            }}
+                        #pragma unroll pfc
+                        for(int ff = 0; ff < {config}::n_filt; ff++) {{
+                            int w_idx = ((((fh * {config}::filt_width) + fw) * {config}::n_filt) + ff) * {config}::n_chan + cc;
+                            acc[ff] += static_cast<output_elem_t>(in_val * {w}[w_idx]);
                         }}
                     }}
                 }}
+            }}
+
+            // Write accumulated results back to the output tensor
+            #pragma unroll
+            for(int ff = 0; ff < {config}::n_filt; ff++) {{
+                int out_idx = (oh * {config}::out_width + ow) * {config}::n_filt + ff;
+                {output}[out_idx] = acc[ff];
             }}
         }}
     }}
