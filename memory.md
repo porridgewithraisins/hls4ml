@@ -301,3 +301,60 @@ See iterate.sh in hls4ml root folder
    - Setting `config['Model']['ChannelsLastConversion'] = 'internal'` removed the redundant transpose while keeping internal tensors channels-last; regenerated `myproject.cpp` now mirrors PyTorch indexing.
    - After the change, MAE between PyTorch outputs and HLS quantized results is ≈5e-3 for the large random case, with max error ≈1.9e-2—fully attributable to fixed-point quantization.
 - **Result**: Functional parity is achieved; remaining work is performance tuning and precision exploration.
+
+## Phase 6: Template Optimization
+
+### Initial Baseline-to-Optimized Iteration
+
+After establishing functional correctness in Phase 5, we turned to reducing resource usage while maintaining the same throughput characteristics. The oneAPI backend synthesis report for our baseline sequential implementation showed significant FPGA resource consumption (Agilex7, 5ns clock target):
+
+**Baseline metrics (sequential loops, no pragmas):**
+- ALUTs: 291,565 (49.6% of available)
+- Flip-flops: 333,997 (36.5%)
+- Initiation Interval (II): 3 cycles on innermost loop
+- Bottleneck: 11,520-bit accumulator shifts dominating area
+
+**Challenge:** Aggressive full-unroll pragmas on nested loops caused design explosion—the report linker hung due to creating thousands of parallel MAC units for the 7-channel × 3×3 filter × 5-output configuration.
+
+**Solution:** Applied selective optimizations inspired by the existing Conv2D im2col implementation (`nnet_conv2d_resource.h`), which uses controlled unrolling via `parallelization_factor`:
+
+1. **Full unroll on bias init loop**: Small bounded iteration (180 elements), safe to unroll completely for initialization.
+2. **Computed parallelization factor**: `pfc = MIN(n_filt, parallelization_factor)` to limit filter-loop unrolling; with default `parallelization_factor=1` and `n_filt=5`, only one filter computed per iteration (no explosion).
+3. **Initiation interval constraint**: Added `[[intel::initiation_interval(reuse_factor)]]` pragma on the filter width loop to respect throughput requirements without over-pipelining.
+4. **Strategic register placement**: Applied `[[intel::fpga_register]]` attribute only to the input value register (`in_val`) to reduce repeated memory accesses, avoiding wholesale register insertion that inflated state.
+
+**Optimized metrics:**
+- ALUTs: 206,344 (39.6%, **29% reduction**)
+- Flip-flops: 303,975 (26.6%, **9% reduction**)
+- II: 3 cycles (unchanged, matching reuse_factor constraint)
+- Key wins:
+  - `layer2_out` barrel shifter: 46k FFs → 23k FFs (50% reduction from input register reuse)
+  - Private memory copies: 10 → 9 (reduced loop concurrency)
+
+**Validation:** Emulator still passes with MAE=5.09e-3, matching Phase 5 functional correctness. Synthesis report generation completes quickly without linker hangs, confirming the controlled unrolling strategy scales.
+
+**Takeaway:** For Conv2DTranspose and similar accumulation-heavy layers, selective pragma application guided by `parallelization_factor` and `reuse_factor` achieves significant resource savings without sacrificing throughput or correctness. Full unrolling should be reserved for provably small loops (e.g., bias init), while nested convolution loops require bounded unroll factors to avoid combinatorial explosion.
+
+### Next Steps: User-Configurable Optimization Strategies
+
+Now that we have a working optimization baseline, we need to design a system where users can tune Conv2DTranspose behavior through hls4ml's configuration knobs. Key questions to address:
+
+1. **Knob exposure**: How do users set `ReuseFactor`, `Strategy`, `parallelization_factor`, etc. in the Python test scripts? What's the API surface (`config_from_pytorch_model`, `HLSConfig`, layer-specific overrides)?
+
+2. **Strategy selection**: Should we generate different template variants based on knob combinations? For example:
+   - `Strategy='Latency'` + low `ReuseFactor` → aggressive unrolling (if safe)
+   - `Strategy='Resource'` + high `ReuseFactor` → time-multiplexed MACs
+   - How does `parallelization_factor` interact with these?
+
+3. **Available knobs inventory**: What configuration parameters are relevant for Conv2DTranspose?
+   - IO style (`io_parallel` vs `io_stream`)
+   - Precision overrides (`model_default_t`, layer-specific types)
+   - Pipeline/DATAFLOW directives
+   - Reuse and parallelization factors
+   - Any oneAPI-specific attributes?
+
+4. **Template generation logic**: Do we need conditional code generation in `convolution_templates.py` that inspects the config and emits different pragma combinations? Or can we parameterize a single template effectively?
+
+5. **Testing matrix**: How do we validate that knob combinations don't break correctness or cause synthesis failures? Extend `test_pytorch_conv2dtranspose.py` with a parameter sweep?
+
+Before implementing further optimizations, we should map out the configuration space and design a coherent strategy for template generation that respects user intent while maintaining the optimization gains achieved so far.
