@@ -230,27 +230,34 @@ conv2dtranspose_config_template = """struct config{index} : nnet::conv2d_config 
 
 conv2dtranspose_function_template = """
     // Conv2DTranspose implementation operating on channels_last buffers
-    for(int oh = 0; oh < {config}::out_height; oh++) {{
-        for(int ow = 0; ow < {config}::out_width; ow++) {{
-            for(int ff = 0; ff < {config}::n_filt; ff++) {{
-                int out_idx = oh * {config}::out_width * {config}::n_filt + ow * {config}::n_filt + ff;
-                {output}[out_idx] = {b}[ff];
-            }}
-        }}
+    // Initialize output with bias - full unroll is safe for small copy loop
+    #pragma unroll
+    for(int out_idx = 0; out_idx < {config}::out_height * {config}::out_width * {config}::n_filt; out_idx++) {{
+        int ff = out_idx % {config}::n_filt;
+        {output}[out_idx] = {b}[ff];
     }}
 
+    // Main computation loops - use selective unrolling via parallelization_factor
+    // Compute unroll factors similar to Conv2D im2col pattern
+    constexpr int pfc = ({config}::n_filt > {config}::parallelization_factor) ? {config}::parallelization_factor : {config}::n_filt;
+    
     for(int ih = 0; ih < {config}::in_height; ih++) {{
         for(int iw = 0; iw < {config}::in_width; iw++) {{
             for(int cc = 0; cc < {config}::n_chan; cc++) {{
                 int in_idx = (ih * {config}::in_width + iw) * {config}::n_chan + cc;
-                typename {config}::accum_t in_val = {input}[in_idx];
+                // Register input value to reduce repeated memory access
+                [[intel::fpga_register]] typename {config}::accum_t in_val = {input}[in_idx];
 
                 for(int fh = 0; fh < {config}::filt_height; fh++) {{
+                    // Add initiation interval constraint based on reuse_factor
+                    [[intel::initiation_interval({config}::reuse_factor)]]
                     for(int fw = 0; fw < {config}::filt_width; fw++) {{
                         int oh = ih * {config}::stride_height + fh - {config}::pad_top;
                         int ow = iw * {config}::stride_width + fw - {config}::pad_left;
 
                         if(oh >= 0 && oh < {config}::out_height && ow >= 0 && ow < {config}::out_width) {{
+                            // Controlled unrolling on output filters
+                            #pragma unroll pfc
                             for(int ff = 0; ff < {config}::n_filt; ff++) {{
                                 int w_idx = ((((fh * {config}::filt_width) + fw) * {config}::n_filt) + ff) * {config}::n_chan + cc;
                                 int out_idx = oh * {config}::out_width * {config}::n_filt + ow * {config}::n_filt + ff;
