@@ -56,7 +56,6 @@ int main(int argc, char **argv) {
     std::string pline;
 
     if (fin.is_open() && fpr.is_open()) {
-        std::vector<std::vector<float>> predictions;
         unsigned int iteration = 0;
         for (; std::getline(fin, iline) && std::getline(fpr, pline); iteration++) {
             if (iteration % CHECKPOINT == 0) {
@@ -82,8 +81,6 @@ int main(int argc, char **argv) {
             q.single_task(MyProject{});
 
             // hls-fpga-machine-learning convert output
-
-            std::copy(pr.cbegin(), pr.cend(), predictions.back().begin());
 
             for (auto outval : outputs) {
                 fout << outval << " ";

@@ -257,11 +257,17 @@ hls4ml_prj/
 
 ## Next Steps
 
-We now have the Intel oneAPI Base Toolkit on PATH for this repo (via direnv), so the oneAPI backend builds are unblocked even though the FPGA Add-On is not installed yet. Outstanding work:
+We now have the Intel oneAPI Base Toolkit on PATH for this repo (via direnv) and the FPGA Add-On installed, so the oneAPI backend builds are unblocked. Recent progress:
 
-1. Run the Conv2DTranspose regression through the oneAPI C-simulation flow once `icpx` is verified in the environment.
-2. After installing the FPGA Add-On, generate the full synthesis report to capture latency and resource metrics for the Intel flow.
-3. Iterate on optimization knobs (reuse, IOType, precision) using the oneAPI project as the baseline while keeping the Vivado parity tests in place.
+> Note: How to build
+> mkdir build && cd build && cmake -DUSER_INCLUDE_PATHS=/opt/intel/oneapi/compiler/2025.0/opt/oclfpga/include/ ..
+
+- ✅ `make fpga_emu` runs cleanly; emulator outputs match PyTorch (`MAE≈5.1e-3`, `MSE≈3.9e-5`, `MaxAbs≈1.9e-2`).
+- ✅ `make report` succeeds; baseline Agilex7 estimates show ~326k ALUTs (34%), ~423k FFs (22%), 0 DSPs, and 3.8k MLABs. Inner accumulation loop limits the II to 3 because of 11.5k-bit shifts.
+
+Outstanding work:
+
+1. Iterate on optimization knobs (reuse, IOType, precision) using the oneAPI project as the baseline while keeping the Vivado parity tests in place.
 
 ## Data Layout Lessons
 
@@ -280,18 +286,31 @@ We now have the Intel oneAPI Base Toolkit on PATH for this repo (via direnv), so
 - **Higher-level model pruning (docs/advanced/model_optimization.rst):** hls4ml’s Optimization API can reduce filter counts or enforce DSP budgets before conversion—useful if the final mini U-Net needs to fit a tight part once Conv2DTranspose is present.
 - **Verification harness:** Maintain `test_pytorch_conv2dtranspose.py` as a regression across knob combinations (reuse sweep, precision variants, io_parallel vs io_stream) so any template tweak still matches PyTorch within quantization tolerance.
 
-## Testing Commands
+We will be using the oneAPI backend exclusively going forward.
+
+## oneAPI Backend Build Flow
 
 ```bash
-# Run Python test (generates HLS project)
-python test_pytorch_conv2dtranspose.py
-
-# Compile C++ testbench
+# From repo root
 cd hls4ml_prj
-g++ -o myproject_test myproject_test.cpp firmware/myproject.cpp -Ifirmware/ap_types/ -Ifirmware -std=c++11 -D WEIGHTS_DIR='"firmware/weights"'
 
-# Run C++ testbench
-./myproject_test
+# Create or enter build directory
+# in the hls4ml_prj (codegenned) directory:
+
+mkdir -p build
+
+# Configure the project with Intel include paths
+cmake -DUSER_INCLUDE_PATHS=/opt/intel/oneapi/compiler/2025.0/opt/oclfpga/include/ ..
+
+# Build and run the FPGA emulator
+make fpga_emu && cd ..
+./build/myproject.fpga_emu
+
+# Validate numerical parity
+python3 ../../hls4ml/sanitycheck.py
+
+# Generate synthesis estimates
+cd build && make report
 ```
 
 ## Phase 5 Progress
