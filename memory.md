@@ -290,28 +290,7 @@ We will be using the oneAPI backend exclusively going forward.
 
 ## oneAPI Backend Build Flow
 
-```bash
-# From repo root
-cd hls4ml_prj
-
-# Create or enter build directory
-# in the hls4ml_prj (codegenned) directory:
-
-mkdir -p build
-
-# Configure the project with Intel include paths
-cmake -DUSER_INCLUDE_PATHS=/opt/intel/oneapi/compiler/2025.0/opt/oclfpga/include/ ..
-
-# Build and run the FPGA emulator
-make fpga_emu && cd ..
-./build/myproject.fpga_emu
-
-# Validate numerical parity
-python3 ../../hls4ml/sanitycheck.py
-
-# Generate synthesis estimates
-cd build && make report
-```
+See iterate.sh in hls4ml root folder
 
 ## Phase 5 Progress
 
