@@ -488,3 +488,7 @@ Built the spatial-parallel split directly into the Conv2DTranspose generator by 
 - Added `model.eval()` to `test_unet.py` so BatchNorm layers dump inference-mode statistics; emulator error dropped from MAE≈3.43 / MaxAbs≈6.33 to MAE≈0.54 / MaxAbs≈3.52 on the dummy batch.
 - Introduced targeted precision overrides (`ap_fixed<18,8>` result type) for the bottleneck, decoder ConvTranspose, and output head. New build reports MAE≈0.63 / MaxAbs≈1.56, trading a slight MAE bump for a 2.3× reduction in peak absolute error.
 - All experiments used the synthetic NHWC sample emitted by `test_unet.py`; no BatchNorm recalibration yet. Future work: widen accumulators on identified hotspots or profile with representative data once the trained Mini U-Net arrives.
+
+### Trained U-Net
+
+- Trained the Mini U-Net on real pet images, validated the pipeline by loading weights and running inference through both PyTorch and HLS harnesses. Used `generate_unet_torch_outputs.py` for reference overlays/masks/logits, and `write_unet_tb_from_images.py` to convert images to NHWC testbench format for HLS. Parsed and visualized HLS outputs via `generate_unet_hls_outputs.py`, enabling direct metric comparison (Logit MAE=8.54, MaxAbs=32.72) and overlay inspection. The workflow now supports parity testing, mask binarization, and quantization sweeps via CLI flags. Future work: reduce MAE by tuning quantization, batchnorm handling, and template precision; document overlay logic and expand regression tests for new optimization knobs.
