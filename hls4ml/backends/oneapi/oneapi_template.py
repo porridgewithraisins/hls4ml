@@ -54,6 +54,11 @@ class TaskSequenceTemplate(Template):
         params['config'] = f'config{layer.index}'
         params['input_pipe'] = layer.get_input_variable().pipe_name
         params['output_pipe'] = layer.get_output_variable().pipe_name
+        out_var = layer.get_output_variable()
+        if out_var is not None and getattr(out_var, 'type', None) is not None:
+            params['output_t'] = out_var.type.name
+        else:
+            params['output_t'] = f"{layer.name}_out_t"
 
         return params
 

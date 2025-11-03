@@ -345,18 +345,21 @@ We will be using the oneAPI backend exclusively going forward.
 
 ## TODO: Next optimization
 
-- Evaluate remaining resource gap versus Conv2D by inspecting the output scatter loop. Current design keeps `parallelization_factor` MAC lanes alive at once, so each output pixel holds a `n_filt`-wide accumulator. Explore time-multiplexing filters (higher reuse factor) to shrink the local accumulator array or serialize writes when users request `Strategy='Resource'`.
-- Mirror Conv2D’s knob handling: honor `ReuseFactor`, `Strategy`, `io_type`, and `implementation` in the config generator, then gate pragmas accordingly (e.g. skip `#pragma unroll pfc` when reuse > 1, emit DATAFLOW wrappers for `io_stream`).
-- Build a regression sweep in `test_pytorch_conv2dtranspose.py` that iterates over representative knob combinations, regenerates the project, and asserts MAE stays within ±1e-2 while reporting resource deltas.
+
+### 2025-11-03 – io_stream enablement recap
+
+- Added a dedicated `nnet_conv2dtranspose_stream.h` helper that wraps the streaming MAC loops in a task-sequence friendly struct so the generator can reference it without inlining templates in `myproject.cpp`.
+- Updated `convolution_templates.py` to include the new header, emit `task_sequence` launches when `Model.IOType` (or a layer override) is `io_stream`, and thread the unroll flags plus `output_t` through the call site.
+- Regenerated the project via `./iterate.sh --agent --io-type io_stream`, resolving successive issues: first a missing torch dependency, then a non-type template argument mismatch, and finally the struct placement fix that restored clean compilation.
+- Verified the generated emulator binary launches, but full synthesis or long fpga_emu runs were skipped because the io_stream build saturates the laptop CPU and exceeds the available headroom; larger-host validation remains pending.
 
 ### 2025-11-03 – oneAPI Conv2DTranspose knob plumbing
 
-- Registered Conv2DTranspose with the oneAPI backend’s reusable attributes so `Strategy`, `ReuseFactor`, and `ParallelizationFactor` flow straight from the user config.
-- Refactored the generated kernel to respect those knobs: the bias/init/write loops only unroll when either latency mode or multi-filter parallelization is requested, and the MAC nesting now chunks filters according to the configured parallelization factor while keeping reuse-driven II hints intact.
-- Added `io_type` metadata to the conv2dtranspose config struct; `io_parallel` remains the default but `io_stream` is now propagated for future streaming support.
-- Verified via `./iterate.sh --agent` that the default build still lands at MAE≈5.09e-3 with identical resource estimates (~68.5k ALUTs / ~175k FFs) so baseline behavior is unchanged pending knob sweeps.
-
-## oneAPI Backend Build Flow
+- [x] Compare `Conv2DTaskSequenceTemplate` usage and replicate an equivalent `Conv2DTransposeTaskSequenceTemplate` so the generator emits a task sequence when `Model.IOType` (or layer override) is `io_stream`.
+- [x] Update the oneAPI backend initializer to surface the per-layer `io_type` attribute in the generated config struct and ensure templates branch on it when selecting between direct function calls and task sequences.
+- [x] Adjust the convolution template to instantiate stream pipes (input/output) and enqueue the async task sequence only when streaming is requested, leaving the existing synchronous call untouched for `io_parallel`.
+- [x] Regenerate the small Conv2DTranspose project in both `io_parallel` and `io_stream` modes via `./iterate.sh --agent` to confirm: (a) streaming build emits `task_sequence` in `myproject.cpp`, (b) emulator MAE remains ≈5.1e-3, and (c) resource reports show the pipes confined to the streaming path.
+- [x] Document the new behavior in `memory.md` once validated so future work knows the streaming gap is closed. Full synthesis and extended fpga_emu runs remain deferred because the io_stream configuration overwhelms the laptop’s available CPU and memory budget.
 
 See iterate.sh in hls4ml root folder
 
@@ -440,3 +443,19 @@ Before implementing further optimizations, we should map out the configuration s
 2. Explore higher filter parallelization (3–5 lanes) while monitoring DSP pressure and register growth.
 3. Revisit reuse factors ≥5 alongside the parallel lanes to trade MAC duplication for tighter control logic.
 4. Evaluate precision downgrades (e.g., ap_fixed<14,4>) once structural knobs settle, keeping MAE within tolerance.
+
+## Next Engineering Tasks
+
+### 1. Enable true `io_stream` support for Conv2DTranspose
+- [ ] Compare `Conv2DTaskSequenceTemplate` usage and replicate an equivalent `Conv2DTransposeTaskSequenceTemplate` so the generator emits a task sequence when `Model.IOType` (or layer override) is `io_stream`.
+- [ ] Update the oneAPI backend initializer to surface the per-layer `io_type` attribute in the generated config struct and ensure templates branch on it when selecting between direct function calls and task sequences.
+- [ ] Adjust the convolution template to instantiate stream pipes (input/output) and enqueue the async task sequence only when streaming is requested, leaving the existing synchronous call untouched for `io_parallel`.
+- [ ] Regenerate the small Conv2DTranspose project in both `io_parallel` and `io_stream` modes via `./iterate.sh --agent` to confirm: (a) streaming build emits `task_sequence` in `myproject.cpp`, (b) emulator MAE remains ≈5.1e-3, and (c) resource reports show the pipes confined to the streaming path.
+- [ ] Document the new behavior in `memory.md` once validated so future work knows the streaming gap is closed.
+
+### 2. Broaden parallelization coverage beyond filter lanes
+- [ ] Inspect `nnet_conv2d_resource.h` to catalogue how `parallelization_factor` currently splits work across width (`pfc`) and height (`pfr`) loops, noting pragma placement and compute/dataflow interactions.
+- [ ] Extend the Conv2DTranspose template to derive analogous `pfc/pfr` values and apply controlled unrolling or loop duplication across spatial positions, ensuring reuse-factor–driven II constraints are still enforced.
+- [ ] Refactor accumulator management so the widened parallelism does not explode local storage (e.g., tile-sized accumulators vs. global arrays) and gates unrolling only when lane count exceeds one or latency strategy is requested.
+- [ ] Rebuild the harness with representative configs (`ParallelizationFactor` 1–3, `ReuseFactor` 1 & 5) to verify synthesis stability and collect ALUT/FF deltas, keeping MAE steady.
+- [ ] Update `memory.md` with post-change measurements and carve out follow-up precision/streaming experiments if new hotspots appear.

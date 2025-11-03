@@ -349,7 +349,11 @@ conv2dtranspose_function_template = """
     }}
 """
 
-conv2dtranspose_include_list = ['nnet_utils/nnet_conv2d.h']
+conv2dtranspose_include_list = ['nnet_utils/nnet_conv2d.h', 'nnet_utils/nnet_conv2dtranspose_stream.h']
+
+conv2dtranspose_task_sequence_template = 'task_sequence<nnet::conv2dtranspose_stream_body<{input_pipe}, {output_pipe}, {config}, {unroll_bias}, {unroll_filters}, {unroll_writes}>::run, 8> {name};'
+
+conv2dtranspose_stream_function_template = '{name}.async({w}, {b});'
 
 
 class Conv2DConfigTemplate(LayerConfigTemplate):
@@ -458,6 +462,12 @@ class Conv2DTransposeFunctionTemplate(FunctionCallTemplate):
         params['w'] = node.get_weights('weight').name
         params['b'] = node.get_weights('bias').name
 
+        io_type = node.model.config.get_config_value('IOType')
+        if isinstance(io_type, str):
+            io_type = io_type.lower()
+        if io_type == 'io_stream':
+            return ''
+
         strategy = node.get_attr('strategy', 'resource')
         if isinstance(strategy, str):
             strategy = strategy.lower()
@@ -478,4 +488,59 @@ class Conv2DTransposeFunctionTemplate(FunctionCallTemplate):
         params['unroll_filters'] = 'true' if unroll else 'false'
         params['unroll_writes'] = 'true' if unroll else 'false'
 
+        return self.template.format(**params)
+
+
+class Conv2DTransposeTaskSequenceTemplate(TaskSequenceTemplate):
+    def __init__(self):
+        super().__init__(Conv2DTranspose)
+        self.template = conv2dtranspose_task_sequence_template
+
+    def format(self, node):
+        io_type = node.model.config.get_config_value('IOType')
+        if isinstance(io_type, str):
+            io_type = io_type.lower()
+        if io_type != 'io_stream':
+            return ''
+
+        params = self._default_function_params(node)
+
+        strategy = node.get_attr('strategy', 'resource')
+        if isinstance(strategy, str):
+            strategy = strategy.lower()
+
+        parallelization = node.get_attr('parallelization', 1)
+        try:
+            parallelization = int(parallelization)
+        except (TypeError, ValueError):
+            parallelization = 1
+
+        n_filt = int(node.get_attr('n_filt'))
+        lanes = parallelization if parallelization > 0 else 1
+        if lanes > n_filt:
+            lanes = n_filt
+
+        unroll = (lanes > 1) or (strategy == 'latency')
+        params['unroll_bias'] = 'true' if unroll else 'false'
+        params['unroll_filters'] = 'true' if unroll else 'false'
+        params['unroll_writes'] = 'true' if unroll else 'false'
+
+        return self.template.format(**params)
+
+
+class Conv2DTransposeStreamFunctionTemplate(StreamFunctionCallTemplate):
+    def __init__(self):
+        super().__init__(Conv2DTranspose)
+        self.template = conv2dtranspose_stream_function_template
+
+    def format(self, node):
+        io_type = node.model.config.get_config_value('IOType')
+        if isinstance(io_type, str):
+            io_type = io_type.lower()
+        if io_type != 'io_stream':
+            return ''
+
+        params = self._default_function_params(node)
+        params['w'] = node.get_weights('weight').name
+        params['b'] = node.get_weights('bias').name
         return self.template.format(**params)

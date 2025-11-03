@@ -115,6 +115,7 @@ if __name__ == "__main__":
         output_dir="hls4ml_prj",
         backend="oneAPI",
         hls_config=config,
+        io_type=args.io_type,
     )
 
     hls_model.write()
