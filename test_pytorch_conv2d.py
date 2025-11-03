@@ -42,7 +42,7 @@ print("PyTorch output shape:", torch_output.shape)
 config = config_from_pytorch_model(model, input_shape=(2, 4, 4), granularity="name")
 
 hls_model = convert_from_pytorch_model(
-    model, output_dir="hls4ml_prj_conv2d", backend="Vivado", hls_config=config
+    model, output_dir="hls4ml_prj_conv2d", backend="oneAPI", hls_config=config
 )
 
 # Print model info
