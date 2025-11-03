@@ -569,8 +569,7 @@ class VivadoBackend(FPGABackend):
         else:
             layer.set_attr('strategy', 'latency')
 
-        # For Conv2DTranspose, we process at stride granularity
-        # Calculate the processing dimensions
+        # process at stride granularity
         proc_height = (
             layer.get_output_variable().shape[0] + layer.get_attr('pad_top') + layer.get_attr('stride_height') - 1
         ) // layer.get_attr('stride_height')
@@ -581,7 +580,7 @@ class VivadoBackend(FPGABackend):
         layer.set_attr('proc_height', proc_height)
         layer.set_attr('proc_width', proc_width)
 
-        # Set partitions
+        # set partitions
         chosen_pf = layer.model.config.get_layer_config_value(layer, 'ParallelizationFactor', 1)
         valid_pf = self.get_valid_conv_partition_splits(proc_height, proc_width)
         if chosen_pf not in valid_pf:

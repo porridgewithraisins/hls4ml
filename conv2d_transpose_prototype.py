@@ -50,7 +50,6 @@ def conv2d_transpose(x, w, bias=None, padding="same"):
 
     out = np.zeros((N, H_out, W_out, C_out), dtype=np.result_type(x, w))
 
-    # Direct implementation: each input pixel contributes a KHxKW patch in the output
     for n in range(N):
         for h in range(H):
             for wi in range(W):
@@ -58,7 +57,6 @@ def conv2d_transpose(x, w, bias=None, padding="same"):
                     val = x[n, h, wi, c_in]
                     if val == 0:
                         continue
-                    # add kernel * val into the right location
                     for kh in range(KH):
                         out_h = h * stride_h - pad_h + kh
                         if out_h < 0 or out_h >= H_out:
@@ -76,7 +74,7 @@ def conv2d_transpose(x, w, bias=None, padding="same"):
     return out
 
 
-# Small helper tests
+# Copilot: Small helper tests
 def _test_1d_toy():
     # 1D toy example adapted to 2D with H=1 for clarity
     # Input = [a, b] -> shape (1, 1, 2, 1)

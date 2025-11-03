@@ -1,5 +1,7 @@
 import numpy as np
 
+# copilot: transpose convolution 2d naive implementation
+
 # input (N=1, C_in=2, H=W=2)
 x = np.array([[
     [[1., 2.],

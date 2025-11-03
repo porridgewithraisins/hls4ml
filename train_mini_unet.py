@@ -11,6 +11,8 @@ from torchvision import datasets, transforms
 from torchvision.transforms.functional import InterpolationMode
 from tqdm import tqdm
 
+# copilot: take the model from test_unet.py and train on Oxford-IIIT pet dataset
+# leave getitem dunder on dataset class empty for me to write
 
 class DoubleConv(nn.Module):
     def __init__(self, in_channels, out_channels, mid_channels=None):
@@ -91,9 +93,9 @@ class PetSegmentation(datasets.OxfordIIITPet):
         img, mask = super().__getitem__(index)
         img = self.img_tf(img)
         mask = self.mask_tf(mask)
-        mask = torch.from_numpy(np.array(mask, dtype=np.uint8, copy=True))
-        mask = (mask > 0).float()
-        return img, mask.unsqueeze(0)
+        mask_np = np.array(mask, dtype=np.uint8, copy=True)
+        foreground = np.isin(mask_np, (1, 3)).astype(np.float32)
+        return img, torch.from_numpy(foreground).unsqueeze(0)
 
 
 def train(args):

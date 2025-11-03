@@ -756,7 +756,6 @@ class Conv2DTransposeConfigTemplate(LayerConfigTemplate):
 
         conv_config = self.template.format(**params)
 
-        # Mult config for the convolution
         mult_params = self._default_config_params(node)
         mult_params['n_in'] = node.get_attr('filt_height') * node.get_attr('filt_width') * node.get_attr('n_chan')
         mult_params['n_out'] = node.get_attr('n_filt')
@@ -765,7 +764,6 @@ class Conv2DTransposeConfigTemplate(LayerConfigTemplate):
             node.get_input_variable().type.precision, node.get_weights('weight').type.precision
         )
 
-        # Add dense_function parameter based on strategy
         if node.get_attr('strategy').lower() == 'latency':
             mult_params['dense_function'] = 'nnet::DenseLatency'
         else:  # resource strategy

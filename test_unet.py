@@ -46,7 +46,7 @@ class Up(nn.Module):
 
     def forward(self, x, skip):
         x = self.up(x)
-        # Skip tensors come from higher-resolution encoder stages; cat preserves alignment for even-sized inputs.
+        # skip tensors come from higher-resolution encoder stages; cat preserves alignment for even-sized inputs.
         return self.conv(torch.cat([skip, x], dim=1))
 
 
@@ -99,13 +99,36 @@ if __name__ == '__main__':
     parser.add_argument('--parallelization-factor', type=int, default=int(os.getenv('HLS_PARALLELIZATION_FACTOR', '1')))
     parser.add_argument('--io-type', default=os.getenv('HLS_IO_TYPE', 'io_parallel'), choices=['io_parallel', 'io_stream'])
     parser.add_argument('--output-dir', default='hls4ml_prj_unet', help='Project output directory')
+    parser.add_argument('--load', type=Path, help='Optional checkpoint (.pt) to load into the Mini U-Net')
+    parser.add_argument(
+        '--precision',
+        type=str,
+        default='ap_fixed<18,8>',
+        help='HLS result precision type (e.g. ap_fixed<18,8> or ap_fixed<24,10>)',
+    )
 
     args = parser.parse_args()
 
     torch.manual_seed(0)
 
     model = MiniUNet(base_channels=args.base_channels)
-    model.eval()  # Ensure batchnorm layers use inference statistics during reference dump
+    if args.load:
+        load_path = Path(args.load)
+        if not load_path.exists():
+            raise FileNotFoundError(f'Checkpoint not found: {load_path}')
+        checkpoint = torch.load(load_path, map_location='cpu')
+        state_dict = checkpoint.get('model_state', checkpoint)
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        if missing or unexpected:
+            print('Warning: state_dict mismatch when loading checkpoint:')
+            if missing:
+                print('  Missing keys:', ', '.join(missing))
+            if unexpected:
+                print('  Unexpected keys:', ', '.join(unexpected))
+        print(f'Loaded weights from {load_path}')
+
+    model.eval()  # ensure batchnorm layers use inference statistics during reference dump
+
     dummy_input = torch.randn(args.batch_size, 3, args.image_size, args.image_size)
     with torch.no_grad():
         ref_output = model(dummy_input)
@@ -133,15 +156,15 @@ if __name__ == '__main__':
     hls_config['OutputPredictions'] = str(output_file)
 
     precision_overrides = {
-        'bottleneck_block_0': 'ap_fixed<18,8>',
-        'bottleneck_block_3': 'ap_fixed<18,8>',
-        'up1_up': 'ap_fixed<18,8>',
-        'up1_conv_block_0': 'ap_fixed<18,8>',
-        'up1_conv_block_3': 'ap_fixed<18,8>',
-        'up2_up': 'ap_fixed<18,8>',
-        'up2_conv_block_0': 'ap_fixed<18,8>',
-        'up2_conv_block_3': 'ap_fixed<18,8>',
-        'outc': 'ap_fixed<18,8>',
+        'bottleneck_block_0': args.precision,
+        'bottleneck_block_3': args.precision,
+        'up1_up': args.precision,
+        'up1_conv_block_0': args.precision,
+        'up1_conv_block_3': args.precision,
+        'up2_up': args.precision,
+        'up2_conv_block_0': args.precision,
+        'up2_conv_block_3': args.precision,
+        'outc': args.precision,
     }
 
     for name in ['inc', 'down1', 'down2', 'bottleneck', 'up1', 'up2', 'outc']:
@@ -154,7 +177,7 @@ if __name__ == '__main__':
         layer_cfg = hls_config['LayerName'].setdefault(name, {})
         precision_cfg = layer_cfg.setdefault('Precision', {})
         precision_cfg['result'] = precision
-        # Bias/weight entries default to auto; leave untouched to avoid unnecessary resource growth.
+        # weight entries default to auto; leave untouched to avoid unnecessary resource growth.
 
     print('Applied hls4ml overrides:')
     print(f'  OutputDir={output_dir}')

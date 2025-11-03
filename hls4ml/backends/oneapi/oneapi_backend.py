@@ -361,13 +361,13 @@ class OneAPIBackend(FPGABackend):
         layer.set_attr('rfpad', 0)
         layer.set_attr('bfpad', 0)
 
-        # Strategy and reuse configuration
+        # strategy and reuse configuration
         default_strategy = layer.model.config.get_layer_config_value(layer, 'Strategy', 'resource')
         if isinstance(default_strategy, str):
             default_strategy = default_strategy.lower()
         layer.set_attr('strategy', default_strategy)
 
-        # Default latency behaviour: prefer minimal reuse when the user has not explicitly chosen otherwise
+        # default latency behaviour: prefer minimal reuse when the user has not explicitly chosen otherwise
         reuse_override = layer.model.config.get_layer_config_value(layer, 'ReuseFactor', None)
         if default_strategy == 'latency' and reuse_override is None and layer.get_attr('target_cycles') is None:
             layer.set_attr('reuse_factor', 1)
@@ -376,7 +376,7 @@ class OneAPIBackend(FPGABackend):
         n_in, n_out = self.get_layer_mult_size(layer)
         self.set_closest_reuse_factor(layer, n_in, n_out)
 
-        # Parallelization factor determines how many filters are processed in parallel
+        # parallelization factor determines how many filters are processed in parallel
         pf_override = layer.model.config.get_layer_config_value(layer, 'ParallelizationFactor', None)
         if pf_override is None:
             pf = 1

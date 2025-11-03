@@ -28,7 +28,7 @@ def parse_conv2dtranspose_layer(operation, layer_name, input_names, input_shapes
     layer['class_name'] = 'Conv2DTranspose'
     layer['data_format'] = 'channels_first'  # Pytorch default, like Conv2D
 
-    # Get weights and biases - keep PyTorch's format
+    # weights and biases - keep PyTorch's format
     layer['weight_data'] = class_object.weight.data.numpy()
 
     if class_object.bias is not None:
@@ -36,17 +36,17 @@ def parse_conv2dtranspose_layer(operation, layer_name, input_names, input_shapes
     else:
         layer['bias_data'] = None
 
-    # Input info
+    # input info
     (*_, layer['in_height'], layer['in_width'], layer['n_chan']) = parse_data_format(input_shapes[0], 'channels_first')
 
-    # Layer parameters
+    # layer parameters
     layer['n_filt'] = class_object.out_channels
     layer['filt_height'] = class_object.kernel_size[0]
     layer['filt_width'] = class_object.kernel_size[1]
     layer['stride_height'] = class_object.stride[0]
     layer['stride_width'] = class_object.stride[1]
 
-    # Calculate output dimensions
+    # calculate output dimensions
     if isinstance(class_object.padding, tuple):
         layer['pad_top'] = layer['pad_bottom'] = class_object.padding[0]
         layer['pad_left'] = layer['pad_right'] = class_object.padding[1]

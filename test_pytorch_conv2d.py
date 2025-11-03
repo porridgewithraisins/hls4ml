@@ -4,6 +4,7 @@ import numpy as np
 from hls4ml.converters import convert_from_pytorch_model
 from hls4ml.utils.config import config_from_pytorch_model
 
+# copilot: mirror test_pytorch_conv2dtranspose.py but for Conv2D
 
 # Define a simple model with Conv2D
 class SimpleModel(nn.Module):

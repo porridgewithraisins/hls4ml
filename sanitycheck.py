@@ -9,6 +9,8 @@ from typing import Iterable
 
 import numpy as np
 
+# copilot: sanity check MAE MSE max abs error between two files
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)

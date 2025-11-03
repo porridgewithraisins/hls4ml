@@ -1,8 +1,9 @@
 import numpy as np
 
-# Reproduce the incorrect Conv2DTranspose behavior observed in the HLS build.
-# The layer3 tensor mimics the output after an unintended extra transpose,
-# so running the scatter below yields the mismatched 19/29/14/25 result.
+# copilot:
+# Reproduce the incorrect Conv2DTranspose behavior.
+# The layer3 tensor should mimic the output after an unintended extra transpose,
+
 layer3 = np.array(
     [
         [[1.0, 2.0], [1.0, 2.0]],
