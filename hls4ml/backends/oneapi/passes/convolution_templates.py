@@ -264,9 +264,22 @@ conv2dtranspose_function_template = """
     constexpr int pfr = (capped_pfr < 1) ? 1 : capped_pfr;
     constexpr int spatial_tiles = safe_pfc * pfr;
     constexpr int filter_lane_candidates = (spatial_tiles > 0) ? (total_pf / spatial_tiles) : total_pf;
-    constexpr int filters_per_iter = (filter_lane_candidates < 1)
-                                         ? 1
-                                         : ((filter_lane_candidates > max_filters) ? max_filters : filter_lane_candidates);
+    constexpr int filters_per_iter_parallel = (filter_lane_candidates < 1)
+                                                  ? 1
+                                                  : ((filter_lane_candidates > max_filters) ? max_filters : filter_lane_candidates);
+    constexpr int total_macs = max_filters * {config}::n_chan;
+    constexpr int reuse_parallel_macs = ({config}::reuse_factor > 0)
+                                            ? ((total_macs + {config}::reuse_factor - 1) / {config}::reuse_factor)
+                                            : total_macs;
+    constexpr int reuse_filter_lanes = ({config}::n_chan > 0)
+                                           ? ((reuse_parallel_macs + {config}::n_chan - 1) / {config}::n_chan)
+                                           : reuse_parallel_macs;
+    constexpr int bounded_reuse_lanes = (reuse_filter_lanes < 1)
+                                            ? 1
+                                            : ((reuse_filter_lanes > max_filters) ? max_filters : reuse_filter_lanes);
+    constexpr int filters_per_iter = (filters_per_iter_parallel < bounded_reuse_lanes)
+                                         ? filters_per_iter_parallel
+                                         : bounded_reuse_lanes;
     constexpr bool unroll_bias_loop = {unroll_bias};
     constexpr bool unroll_filter_loop = {unroll_filters};
     constexpr bool unroll_write_loop = {unroll_writes};
@@ -369,6 +382,48 @@ conv2dtranspose_include_list = ['nnet_utils/nnet_conv2d.h', 'nnet_utils/nnet_con
 conv2dtranspose_task_sequence_template = 'task_sequence<nnet::conv2dtranspose_stream_body<{input_pipe}, {output_pipe}, {config}, {unroll_bias}, {unroll_filters}, {unroll_writes}>::run, 8> {name};'
 
 conv2dtranspose_stream_function_template = '{name}.async({w}, {b});'
+
+
+def _conv2dtranspose_filters_per_iter(node):
+    total_pf = int(node.get_attr('parallelization', 1) or 1)
+    if total_pf < 1:
+        total_pf = 1
+
+    out_height = int(node.get_attr('out_height'))
+    out_width = int(node.get_attr('out_width'))
+    n_filt = int(node.get_attr('n_filt'))
+    n_chan = int(node.get_attr('n_chan'))
+    reuse = int(node.get_attr('reuse_factor'))
+
+    spatial_capacity = out_height * out_width
+    spatial_pf = min(total_pf, spatial_capacity) if spatial_capacity > 0 else total_pf
+    raw_pfc = min(spatial_pf, out_width) if out_width > 0 else 0
+    safe_pfc = raw_pfc if raw_pfc >= 1 else 1
+    raw_pfr = spatial_pf // safe_pfc if safe_pfc > 0 else spatial_pf
+    capped_pfr = min(raw_pfr, out_height) if out_height > 0 else raw_pfr
+    pfr = capped_pfr if capped_pfr >= 1 else 1
+    spatial_tiles = safe_pfc * pfr
+    filter_lane_candidates = total_pf // spatial_tiles if spatial_tiles > 0 else total_pf
+    if filter_lane_candidates < 1:
+        filter_lane_candidates = 1
+    if filter_lane_candidates > n_filt:
+        filter_lane_candidates = n_filt
+
+    total_macs = n_filt * n_chan
+    reuse_parallel_macs = ((total_macs + reuse - 1) // reuse) if reuse > 0 else total_macs
+    if reuse_parallel_macs < 1:
+        reuse_parallel_macs = 1
+    reuse_filter_lanes = ((reuse_parallel_macs + n_chan - 1) // n_chan) if n_chan > 0 else reuse_parallel_macs
+    if reuse_filter_lanes < 1:
+        reuse_filter_lanes = 1
+    if reuse_filter_lanes > n_filt:
+        reuse_filter_lanes = n_filt
+
+    filters_per_iter = min(filter_lane_candidates, reuse_filter_lanes)
+    if filters_per_iter < 1:
+        filters_per_iter = 1
+
+    return filters_per_iter
 
 
 class Conv2DConfigTemplate(LayerConfigTemplate):
@@ -478,6 +533,7 @@ class Conv2DTransposeFunctionTemplate(FunctionCallTemplate):
         params['b'] = node.get_weights('bias').name
 
         io_type = node.model.config.get_config_value('IOType')
+        print("lol", io_type)
         if isinstance(io_type, str):
             io_type = io_type.lower()
         if io_type == 'io_stream':
@@ -487,21 +543,12 @@ class Conv2DTransposeFunctionTemplate(FunctionCallTemplate):
         if isinstance(strategy, str):
             strategy = strategy.lower()
 
-        parallelization = node.get_attr('parallelization', 1)
-        try:
-            parallelization = int(parallelization)
-        except (TypeError, ValueError):
-            parallelization = 1
-
-        n_filt = int(node.get_attr('n_filt'))
-        lanes = parallelization if parallelization > 0 else 1
-        if lanes > n_filt:
-            lanes = n_filt
-
-        unroll = (lanes > 1) or (strategy == 'latency')
+        filters_per_iter = _conv2dtranspose_filters_per_iter(node)
+        unroll = (filters_per_iter > 1) or (strategy == 'latency')
         params['unroll_bias'] = 'true' if unroll else 'false'
         params['unroll_filters'] = 'true' if unroll else 'false'
         params['unroll_writes'] = 'true' if unroll else 'false'
+        # print('LLLLL', params)
 
         return self.template.format(**params)
 
@@ -513,6 +560,7 @@ class Conv2DTransposeTaskSequenceTemplate(TaskSequenceTemplate):
 
     def format(self, node):
         io_type = node.model.config.get_config_value('IOType')
+        print("lol", io_type)
         if isinstance(io_type, str):
             io_type = io_type.lower()
         if io_type != 'io_stream':
@@ -550,12 +598,14 @@ class Conv2DTransposeStreamFunctionTemplate(StreamFunctionCallTemplate):
 
     def format(self, node):
         io_type = node.model.config.get_config_value('IOType')
+        print("lol", io_type)
         if isinstance(io_type, str):
             io_type = io_type.lower()
         if io_type != 'io_stream':
             return ''
 
         params = self._default_function_params(node)
+        # print('LLLLL', params)
         params['w'] = node.get_weights('weight').name
         params['b'] = node.get_weights('bias').name
         return self.template.format(**params)

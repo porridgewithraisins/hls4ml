@@ -366,15 +366,30 @@ class OneAPIBackend(FPGABackend):
         if isinstance(default_strategy, str):
             default_strategy = default_strategy.lower()
         layer.set_attr('strategy', default_strategy)
+
+        # Default latency behaviour: prefer minimal reuse when the user has not explicitly chosen otherwise
+        reuse_override = layer.model.config.get_layer_config_value(layer, 'ReuseFactor', None)
+        if default_strategy == 'latency' and reuse_override is None and layer.get_attr('target_cycles') is None:
+            layer.set_attr('reuse_factor', 1)
+
         self.set_target_reuse_factor(layer)
         n_in, n_out = self.get_layer_mult_size(layer)
         self.set_closest_reuse_factor(layer, n_in, n_out)
 
         # Parallelization factor determines how many filters are processed in parallel
-        pf = layer.model.config.get_layer_config_value(layer, 'ParallelizationFactor', 1)
-        if pf is None:
+        pf_override = layer.model.config.get_layer_config_value(layer, 'ParallelizationFactor', None)
+        if pf_override is None:
             pf = 1
-        layer.set_attr('parallelization', max(1, int(pf)))
+            if default_strategy == 'latency':
+                pf = layer.get_attr('n_filt')
+        else:
+            pf = pf_override
+
+        try:
+            pf = int(pf)
+        except (TypeError, ValueError):
+            pf = 1
+        layer.set_attr('parallelization', max(1, pf))
 
     @layer_optimizer(LSTM)
     def init_lstm(self, layer):

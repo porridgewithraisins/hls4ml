@@ -720,6 +720,7 @@ class WeightVariable(Variable):
         print("DEBUG: update_precision for ", new_precision ,"called with new_precision type checks:", whichtypedebug)
         if isinstance(new_precision, UnspecifiedPrecisionType):
             self.precision_fmt = ''  # Temporarily set precision to undefined value
+            # self.precision_fmt = 'HAHAHAHAHA'
         elif isinstance(new_precision, (IntegerPrecisionType, XnorPrecisionType, ExponentPrecisionType)):
             self.precision_fmt = '{:.0f}'
         elif isinstance(new_precision, FixedPrecisionType):

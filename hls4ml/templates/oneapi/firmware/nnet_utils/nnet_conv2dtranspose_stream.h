@@ -27,9 +27,18 @@ struct conv2dtranspose_stream_body {
         constexpr int pfr = (capped_pfr < 1) ? 1 : capped_pfr;
         constexpr int spatial_tiles = safe_pfc * pfr;
         constexpr int filter_lane_candidates = (spatial_tiles > 0) ? (total_pf / spatial_tiles) : total_pf;
-        constexpr int filters_per_iter =
+        constexpr int filters_per_iter_parallel =
             (filter_lane_candidates < 1) ? 1
                                          : ((filter_lane_candidates > max_filters) ? max_filters : filter_lane_candidates);
+        constexpr int total_macs = max_filters * CONFIG_T::n_chan;
+        constexpr int reuse_parallel_macs =
+            (CONFIG_T::reuse_factor > 0) ? ((total_macs + CONFIG_T::reuse_factor - 1) / CONFIG_T::reuse_factor) : total_macs;
+        constexpr int reuse_filter_lanes =
+            (CONFIG_T::n_chan > 0) ? ((reuse_parallel_macs + CONFIG_T::n_chan - 1) / CONFIG_T::n_chan) : reuse_parallel_macs;
+        constexpr int bounded_reuse_lanes =
+            (reuse_filter_lanes < 1) ? 1 : ((reuse_filter_lanes > max_filters) ? max_filters : reuse_filter_lanes);
+        constexpr int filters_per_iter =
+            (filters_per_iter_parallel < bounded_reuse_lanes) ? filters_per_iter_parallel : bounded_reuse_lanes;
 
     HeightLoop:
 #pragma unroll pfr

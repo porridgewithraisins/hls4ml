@@ -463,3 +463,16 @@ Before implementing further optimizations, we should map out the configuration s
 ### 2025-11-03 – spatial parallelization check-in
 
 Built the spatial-parallel split directly into the Conv2DTranspose generator by mirroring Conv2D’s `pfc/pfr` factoring: the function template now divides the `parallelization_factor` between width/height tiles before assigning any residual lanes to filters, and the streaming helper was updated in lockstep. Baseline (`ParallelizationFactor=1`) reproduces the previous code path, while rerunning `./iterate.sh --agent --parallelization-factor 2` drops the Agilex7 estimate from ~95k→90k ALUTs and ~234k→205k FFs with MAE unchanged at 5.09e-3; the tool allocates a second DSP lane to cover the extra filters. Area.json confirms the reductions concentrate in the compute basic blocks rather than the pipe scaffolding, so the knob is pulling on the intended loops without inflating buffer sizes.
+
+### 2025-11-03 – reuse factor validation
+
+- `./iterate.sh --agent --strategy resource --reuse-factor 25 --parallelization-factor 1` now produces a report with the innermost MAC loop forced to `II>=25`, consuming ~102k ALUT / 225k FF / 6.7k DSP on Agilex7. This demonstrates that large reuse values serialize the reduction lane as intended while leaving outer spatial loops untouched.
+- `./iterate.sh --agent --strategy resource --reuse-factor 1 --parallelization-factor 1` reverts the kernel to fully parallel MACs (`II>=1`) and trims the footprint to ~95k ALUT / 234k FF / 5.9k DSP. The MAE stayed at 5.09e-3 for both runs, matching the quantized baseline.
+- The loop report (`loops.ndjson`, `Myproject.B10`) clearly shows the reuse-driven II bound only on the inner accumulation loop, which is the desired leverage point for trading DSP count against latency without perturbing spatial tiling.
+
+### 2025-11-04 – strategy and parallelization sweeps
+
+- `./iterate.sh --agent --strategy resource --reuse-factor 1 --parallelization-factor 1` (reference) still lands at ~95k ALUT / 234k FF / 1 DSP with the inner MAC loop pinned to `II=1`, confirming the resource strategy path keeps a single filter lane active when reuse is minimal.
+- `./iterate.sh --agent --strategy latency` auto-sets reuse to 1 and fans the unroll flags; resource totals fall to ~68.6k ALUT / 175k FF / 1 DSP because the template now spreads work across spatial lanes while keeping a single filter lane, and the loop report shows bias/write loops fully unrolled.
+- `./iterate.sh --agent --strategy latency --parallelization-factor 3` drives three filter lanes concurrently; reports jump to ~99k ALUT / 226k FF / 3 DSP with the width loop partially unrolled and the MAC loop still holding `II=1`, proving the parallelization factor feeds directly into the lane helper.
+- A latency run with `--parallelization-factor 5` compiled but the hardware report sat in Verilog generation long enough to warrant canceling; worth retrying on a beefier host, but emulator output matched PyTorch prior to the abort.
