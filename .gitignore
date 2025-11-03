@@ -18,3 +18,5 @@ hls4mlprj_*
 hls4ml_prj*/
 sampleimages/
 *.pt
+data/
+unet-results/
