@@ -476,3 +476,15 @@ Built the spatial-parallel split directly into the Conv2DTranspose generator by 
 - `./iterate.sh --agent --strategy latency` auto-sets reuse to 1 and fans the unroll flags; resource totals fall to ~68.6k ALUT / 175k FF / 1 DSP because the template now spreads work across spatial lanes while keeping a single filter lane, and the loop report shows bias/write loops fully unrolled.
 - `./iterate.sh --agent --strategy latency --parallelization-factor 3` drives three filter lanes concurrently; reports jump to ~99k ALUT / 226k FF / 3 DSP with the width loop partially unrolled and the MAC loop still holding `II=1`, proving the parallelization factor feeds directly into the lane helper.
 - A latency run with `--parallelization-factor 5` compiled but the hardware report sat in Verilog generation long enough to warrant canceling; worth retrying on a beefier host, but emulator output matched PyTorch prior to the abort.
+
+### 2025-11-04 – Conv2DTranspose helper refactor
+
+- Pulled the inline Conv2DTranspose accumulator body out of `convolution_templates.py` into a reusable helper (`nnet_utils/nnet_conv2dtranspose.h`).
+- Updated the generator to emit a single `nnet::conv_2dtranspose_cl` call (mirroring Conv2D) and kept both the helper and stream variants in the include list.
+- Reran `./iterate.sh --agent`; the harness now builds cleanly with both ConvTranspose layers sharing the helper, avoiding the previous local constexpr/type alias collisions in `myproject.cpp`.
+
+### 2025-11-04 – Mini U-Net quantization sweep
+
+- Added `model.eval()` to `test_unet.py` so BatchNorm layers dump inference-mode statistics; emulator error dropped from MAE≈3.43 / MaxAbs≈6.33 to MAE≈0.54 / MaxAbs≈3.52 on the dummy batch.
+- Introduced targeted precision overrides (`ap_fixed<18,8>` result type) for the bottleneck, decoder ConvTranspose, and output head. New build reports MAE≈0.63 / MaxAbs≈1.56, trading a slight MAE bump for a 2.3× reduction in peak absolute error.
+- All experiments used the synthetic NHWC sample emitted by `test_unet.py`; no BatchNorm recalibration yet. Future work: widen accumulators on identified hotspots or profile with representative data once the trained Mini U-Net arrives.

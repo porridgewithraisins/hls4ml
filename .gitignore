@@ -15,4 +15,4 @@ hls4mlprj_*
 *~
 *.ipynb_checkpoints/
 *.bak
-hls4ml_prj/
+hls4ml_prj*/
