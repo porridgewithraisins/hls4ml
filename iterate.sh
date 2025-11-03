@@ -2,9 +2,15 @@
 
 set -eo pipefail
 
+MODE="$1"
+shift
+SCRIPT_ARGS="$@"
+
 cd ~/cs6886/proj/hls4ml || exit
 pushd . || exit
-python3 test_pytorch_conv2dtranspose.py
+set -x
+python3 test_pytorch_conv2dtranspose.py $SCRIPT_ARGS
+set +x
 
 if ! test -d hls4ml_prj; then
     echo "Error: codegen hls4ml_prj does not exist" >&2
@@ -30,7 +36,7 @@ test -f myproject.report && rm myproject.report
 make report
 cd myproject.report.prj || exit
 
-if test "$1" == "--agent"; then
+if test "$MODE" == "--agent"; then
     popd || exit
     exit
 fi

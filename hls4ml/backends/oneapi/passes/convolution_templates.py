@@ -145,6 +145,26 @@ class ConvStreamFunctionTemplate(StreamFunctionCallTemplate):
         params['w'] = node.get_weights('weight').name
         params['b'] = node.get_weights('bias').name
 
+        strategy = node.get_attr('strategy', 'resource')
+        if isinstance(strategy, str):
+            strategy = strategy.lower()
+
+        parallelization = node.get_attr('parallelization', 1)
+        try:
+            parallelization = int(parallelization)
+        except (TypeError, ValueError):
+            parallelization = 1
+
+        n_filt = int(node.get_attr('n_filt'))
+        lanes = parallelization if parallelization > 0 else 1
+        if lanes > n_filt:
+            lanes = n_filt
+
+        unroll = (lanes > 1) or (strategy == 'latency')
+        params['unroll_bias'] = 'true' if unroll else 'false'
+        params['unroll_filters'] = 'true' if unroll else 'false'
+        params['unroll_writes'] = 'true' if unroll else 'false'
+
         return self.template.format(**params)
 
 
@@ -221,6 +241,7 @@ conv2dtranspose_config_template = """struct config{index} : nnet::conv2d_config 
     static const unsigned reuse_factor = {reuse};
     static const unsigned parallelization_factor = {parallelization};
     static const bool store_weights_in_bram = false;
+    static const unsigned io_type = nnet::{iotype};
 
     typedef {accum_t.name} accum_t;
     typedef {bias_t.name} bias_t;
@@ -233,15 +254,26 @@ conv2dtranspose_function_template = """
     // Accumulate one output pixel at a time to avoid wide shift registers
     using output_elem_t = typename {output_t}::value_type;
     constexpr int pfc = ({config}::n_filt > {config}::parallelization_factor) ? {config}::parallelization_factor : {config}::n_filt;
+    constexpr int filters_per_iter = (pfc > 0) ? pfc : 1;
+    constexpr int max_filters = {config}::n_filt;
+    constexpr bool unroll_bias_loop = {unroll_bias};
+    constexpr bool unroll_filter_loop = {unroll_filters};
+    constexpr bool unroll_write_loop = {unroll_writes};
 
     for(int oh = 0; oh < {config}::out_height; oh++) {{
         for(int ow = 0; ow < {config}::out_width; ow++) {{
             output_elem_t acc[{config}::n_filt];
 
             // Initialise local accumulators from bias
-            #pragma unroll
-            for(int ff = 0; ff < {config}::n_filt; ff++) {{
-                acc[ff] = static_cast<output_elem_t>({b}[ff]);
+            if constexpr (unroll_bias_loop) {{
+                #pragma unroll
+                for(int ff = 0; ff < {config}::n_filt; ff++) {{
+                    acc[ff] = static_cast<output_elem_t>({b}[ff]);
+                }}
+            }} else {{
+                for(int ff = 0; ff < {config}::n_filt; ff++) {{
+                    acc[ff] = static_cast<output_elem_t>({b}[ff]);
+                }}
             }}
 
             for(int fh = 0; fh < {config}::filt_height; fh++) {{
@@ -274,20 +306,44 @@ conv2dtranspose_function_template = """
                     for(int cc = 0; cc < {config}::n_chan; cc++) {{
                         output_elem_t in_val = static_cast<output_elem_t>({input}[in_base + cc]);
 
-                        #pragma unroll pfc
-                        for(int ff = 0; ff < {config}::n_filt; ff++) {{
-                            int w_idx = ((((fh * {config}::filt_width) + fw) * {config}::n_filt) + ff) * {config}::n_chan + cc;
-                            acc[ff] += static_cast<output_elem_t>(in_val * {w}[w_idx]);
+                        for(int ff_base = 0; ff_base < max_filters; ff_base += filters_per_iter) {{
+                            if constexpr (unroll_filter_loop) {{
+                                #pragma unroll
+                                for(int lane = 0; lane < filters_per_iter; lane++) {{
+                                    int ff = ff_base + lane;
+                                    if (ff >= max_filters) {{
+                                        continue;
+                                    }}
+                                    int w_idx = ((((fh * {config}::filt_width) + fw) * {config}::n_filt) + ff) * {config}::n_chan + cc;
+                                    acc[ff] += static_cast<output_elem_t>(in_val * {w}[w_idx]);
+                                }}
+                            }} else {{
+                                for(int lane = 0; lane < filters_per_iter; lane++) {{
+                                    int ff = ff_base + lane;
+                                    if (ff >= max_filters) {{
+                                        continue;
+                                    }}
+                                    int w_idx = ((((fh * {config}::filt_width) + fw) * {config}::n_filt) + ff) * {config}::n_chan + cc;
+                                    acc[ff] += static_cast<output_elem_t>(in_val * {w}[w_idx]);
+                                }}
+                            }}
                         }}
                     }}
                 }}
             }}
 
             // Write accumulated results back to the output tensor
-            #pragma unroll
-            for(int ff = 0; ff < {config}::n_filt; ff++) {{
-                int out_idx = (oh * {config}::out_width + ow) * {config}::n_filt + ff;
-                {output}[out_idx] = acc[ff];
+            if constexpr (unroll_write_loop) {{
+                #pragma unroll
+                for(int ff = 0; ff < {config}::n_filt; ff++) {{
+                    int out_idx = (oh * {config}::out_width + ow) * {config}::n_filt + ff;
+                    {output}[out_idx] = acc[ff];
+                }}
+            }} else {{
+                for(int ff = 0; ff < {config}::n_filt; ff++) {{
+                    int out_idx = (oh * {config}::out_width + ow) * {config}::n_filt + ff;
+                    {output}[out_idx] = acc[ff];
+                }}
             }}
         }}
     }}
@@ -375,7 +431,7 @@ class Conv2DTransposeConfigTemplate(LayerConfigTemplate):
 
     def format(self, node):
         conv_params = self._default_config_params(node)
-        conv_params['parallelization'] = node.get_attr('parallelization', 1)
+        conv_params['parallelization'] = int(node.get_attr('parallelization', 1))
         conv_params['config_t'] = f'config{node.index}_mult'
         conv_config = self.template.format(**conv_params)
 
@@ -401,5 +457,25 @@ class Conv2DTransposeFunctionTemplate(FunctionCallTemplate):
         params = self._default_function_params(node)
         params['w'] = node.get_weights('weight').name
         params['b'] = node.get_weights('bias').name
+
+        strategy = node.get_attr('strategy', 'resource')
+        if isinstance(strategy, str):
+            strategy = strategy.lower()
+
+        parallelization = node.get_attr('parallelization', 1)
+        try:
+            parallelization = int(parallelization)
+        except (TypeError, ValueError):
+            parallelization = 1
+
+        n_filt = int(node.get_attr('n_filt'))
+        lanes = parallelization if parallelization > 0 else 1
+        if lanes > n_filt:
+            lanes = n_filt
+
+        unroll = (lanes > 1) or (strategy == 'latency')
+        params['unroll_bias'] = 'true' if unroll else 'false'
+        params['unroll_filters'] = 'true' if unroll else 'false'
+        params['unroll_writes'] = 'true' if unroll else 'false'
 
         return self.template.format(**params)

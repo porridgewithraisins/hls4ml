@@ -349,6 +349,13 @@ We will be using the oneAPI backend exclusively going forward.
 - Mirror Conv2D’s knob handling: honor `ReuseFactor`, `Strategy`, `io_type`, and `implementation` in the config generator, then gate pragmas accordingly (e.g. skip `#pragma unroll pfc` when reuse > 1, emit DATAFLOW wrappers for `io_stream`).
 - Build a regression sweep in `test_pytorch_conv2dtranspose.py` that iterates over representative knob combinations, regenerates the project, and asserts MAE stays within ±1e-2 while reporting resource deltas.
 
+### 2025-11-03 – oneAPI Conv2DTranspose knob plumbing
+
+- Registered Conv2DTranspose with the oneAPI backend’s reusable attributes so `Strategy`, `ReuseFactor`, and `ParallelizationFactor` flow straight from the user config.
+- Refactored the generated kernel to respect those knobs: the bias/init/write loops only unroll when either latency mode or multi-filter parallelization is requested, and the MAC nesting now chunks filters according to the configured parallelization factor while keeping reuse-driven II hints intact.
+- Added `io_type` metadata to the conv2dtranspose config struct; `io_parallel` remains the default but `io_stream` is now propagated for future streaming support.
+- Verified via `./iterate.sh --agent` that the default build still lands at MAE≈5.09e-3 with identical resource estimates (~68.5k ALUTs / ~175k FFs) so baseline behavior is unchanged pending knob sweeps.
+
 ## oneAPI Backend Build Flow
 
 See iterate.sh in hls4ml root folder
@@ -419,3 +426,17 @@ Now that we have a working optimization baseline, we need to design a system whe
 5. **Testing matrix**: How do we validate that knob combinations don't break correctness or cause synthesis failures? Extend `test_pytorch_conv2dtranspose.py` with a parameter sweep?
 
 Before implementing further optimizations, we should map out the configuration space and design a coherent strategy for template generation that respects user intent while maintaining the optimization gains achieved so far.
+
+## Knob Exploration
+
+- **Baseline (`io_parallel`, `ReuseFactor=1`, `ParallelizationFactor=1`)**: Reference configuration stays at ALUT≈95k, FF≈234k, DSP=1, MLAB≈5.9k with MAE ≈5.09e-3.
+- **Reuse sweep (`ReuseFactor=5`)**: Valid factor but raised control/state cost (ALUT≈96k, FF≈283k) while leaving accuracy unchanged; additional feedback and barrel shifter depth are the main culprits.
+- **IO topology check (`io_stream`, `ReuseFactor=1`)**: After wiring `Model.IOType`, streaming mode compiles cleanly yet keeps resource totals aligned with baseline, suggesting pipes dominate regardless of interface.
+- **Parallelization lane bump (`ParallelizationFactor=2`)**: Best improvement so far—ALUT≈71.6k and FF≈175.8k with DSP usage at 2, preserving MAE; unrolling two filter lanes balances logic sharing vs. throughput.
+
+### Future Sweeps
+
+1. Combine `io_stream` with `ParallelizationFactor=2` to see if decoupled I/O shaves pipe control overhead.
+2. Explore higher filter parallelization (3–5 lanes) while monitoring DSP pressure and register growth.
+3. Revisit reuse factors ≥5 alongside the parallel lanes to trade MAC duplication for tighter control logic.
+4. Evaluate precision downgrades (e.g., ap_fixed<14,4>) once structural knobs settle, keeping MAE within tolerance.

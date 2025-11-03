@@ -7,7 +7,19 @@ import numpy as np
 from hls4ml.backends import FPGABackend
 from hls4ml.model.attributes import ConfigurableAttribute, TypeAttribute
 from hls4ml.model.flow import register_flow
-from hls4ml.model.layers import GRU, LSTM, Activation, Conv1D, Conv2D, Dense, Embedding, Layer, SimpleRNN, Softmax
+from hls4ml.model.layers import (
+    GRU,
+    LSTM,
+    Activation,
+    Conv1D,
+    Conv2D,
+    Conv2DTranspose,
+    Dense,
+    Embedding,
+    Layer,
+    SimpleRNN,
+    Softmax,
+)
 from hls4ml.model.optimizer import get_backend_passes, layer_optimizer
 from hls4ml.model.types import FixedPrecisionType, IntegerPrecisionType, NamedType
 from hls4ml.report import parse_oneapi_report
@@ -41,6 +53,7 @@ class OneAPIBackend(FPGABackend):
         pf_layers = [
             Conv1D,
             Conv2D,
+            Conv2DTranspose,
         ]
 
         for layer in pf_layers:
@@ -341,6 +354,27 @@ class OneAPIBackend(FPGABackend):
         layer.set_attr(
             'n_partitions', 1
         )  # TODO Not used yet as there is no codegen implementation of CNNs for oneAPI backend
+
+    @layer_optimizer(Conv2DTranspose)
+    def init_conv2dtranspose(self, layer):
+        # Dense matrix multiply properties
+        layer.set_attr('rfpad', 0)
+        layer.set_attr('bfpad', 0)
+
+        # Strategy and reuse configuration
+        default_strategy = layer.model.config.get_layer_config_value(layer, 'Strategy', 'resource')
+        if isinstance(default_strategy, str):
+            default_strategy = default_strategy.lower()
+        layer.set_attr('strategy', default_strategy)
+        self.set_target_reuse_factor(layer)
+        n_in, n_out = self.get_layer_mult_size(layer)
+        self.set_closest_reuse_factor(layer, n_in, n_out)
+
+        # Parallelization factor determines how many filters are processed in parallel
+        pf = layer.model.config.get_layer_config_value(layer, 'ParallelizationFactor', 1)
+        if pf is None:
+            pf = 1
+        layer.set_attr('parallelization', max(1, int(pf)))
 
     @layer_optimizer(LSTM)
     def init_lstm(self, layer):
