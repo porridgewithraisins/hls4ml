@@ -16,3 +16,5 @@ hls4mlprj_*
 *.ipynb_checkpoints/
 *.bak
 hls4ml_prj*/
+sampleimages/
+*.pt
