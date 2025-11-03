@@ -16,12 +16,26 @@ struct conv2dtranspose_stream_body {
         output_t output_buf;
 
         using output_elem_t = typename output_t::value_type;
-        constexpr int pfc =
-            (CONFIG_T::n_filt > CONFIG_T::parallelization_factor) ? CONFIG_T::parallelization_factor : CONFIG_T::n_filt;
-        constexpr int filters_per_iter = (pfc > 0) ? pfc : 1;
+        constexpr int total_pf = (CONFIG_T::parallelization_factor > 0) ? CONFIG_T::parallelization_factor : 1;
         constexpr int max_filters = CONFIG_T::n_filt;
+        constexpr int spatial_capacity = CONFIG_T::out_height * CONFIG_T::out_width;
+        constexpr int spatial_pf = (total_pf < spatial_capacity) ? total_pf : spatial_capacity;
+        constexpr int raw_pfc = (spatial_pf < CONFIG_T::out_width) ? spatial_pf : CONFIG_T::out_width;
+        constexpr int safe_pfc = (raw_pfc < 1) ? 1 : raw_pfc;
+        constexpr int raw_pfr = (safe_pfc > 0) ? (spatial_pf / safe_pfc) : spatial_pf;
+        constexpr int capped_pfr = (raw_pfr < CONFIG_T::out_height) ? raw_pfr : CONFIG_T::out_height;
+        constexpr int pfr = (capped_pfr < 1) ? 1 : capped_pfr;
+        constexpr int spatial_tiles = safe_pfc * pfr;
+        constexpr int filter_lane_candidates = (spatial_tiles > 0) ? (total_pf / spatial_tiles) : total_pf;
+        constexpr int filters_per_iter =
+            (filter_lane_candidates < 1) ? 1
+                                         : ((filter_lane_candidates > max_filters) ? max_filters : filter_lane_candidates);
 
+    HeightLoop:
+#pragma unroll pfr
         for (int oh = 0; oh < CONFIG_T::out_height; oh++) {
+        WidthLoop:
+#pragma unroll safe_pfc
             for (int ow = 0; ow < CONFIG_T::out_width; ow++) {
                 output_elem_t acc[CONFIG_T::n_filt];
 

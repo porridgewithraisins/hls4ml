@@ -253,14 +253,29 @@ conv2dtranspose_function_template = """
     // Conv2DTranspose implementation operating on channels_last buffers
     // Accumulate one output pixel at a time to avoid wide shift registers
     using output_elem_t = typename {output_t}::value_type;
-    constexpr int pfc = ({config}::n_filt > {config}::parallelization_factor) ? {config}::parallelization_factor : {config}::n_filt;
-    constexpr int filters_per_iter = (pfc > 0) ? pfc : 1;
+    constexpr int total_pf = ({config}::parallelization_factor > 0) ? {config}::parallelization_factor : 1;
     constexpr int max_filters = {config}::n_filt;
+    constexpr int spatial_capacity = {config}::out_height * {config}::out_width;
+    constexpr int spatial_pf = (total_pf < spatial_capacity) ? total_pf : spatial_capacity;
+    constexpr int raw_pfc = (spatial_pf < {config}::out_width) ? spatial_pf : {config}::out_width;
+    constexpr int safe_pfc = (raw_pfc < 1) ? 1 : raw_pfc;
+    constexpr int raw_pfr = (safe_pfc > 0) ? (spatial_pf / safe_pfc) : spatial_pf;
+    constexpr int capped_pfr = (raw_pfr < {config}::out_height) ? raw_pfr : {config}::out_height;
+    constexpr int pfr = (capped_pfr < 1) ? 1 : capped_pfr;
+    constexpr int spatial_tiles = safe_pfc * pfr;
+    constexpr int filter_lane_candidates = (spatial_tiles > 0) ? (total_pf / spatial_tiles) : total_pf;
+    constexpr int filters_per_iter = (filter_lane_candidates < 1)
+                                         ? 1
+                                         : ((filter_lane_candidates > max_filters) ? max_filters : filter_lane_candidates);
     constexpr bool unroll_bias_loop = {unroll_bias};
     constexpr bool unroll_filter_loop = {unroll_filters};
     constexpr bool unroll_write_loop = {unroll_writes};
 
+HeightLoop:
+    #pragma unroll pfr
     for(int oh = 0; oh < {config}::out_height; oh++) {{
+    WidthLoop:
+        #pragma unroll safe_pfc
         for(int ow = 0; ow < {config}::out_width; ow++) {{
             output_elem_t acc[{config}::n_filt];
 

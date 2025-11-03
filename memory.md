@@ -454,8 +454,12 @@ Before implementing further optimizations, we should map out the configuration s
 - [ ] Document the new behavior in `memory.md` once validated so future work knows the streaming gap is closed.
 
 ### 2. Broaden parallelization coverage beyond filter lanes
-- [ ] Inspect `nnet_conv2d_resource.h` to catalogue how `parallelization_factor` currently splits work across width (`pfc`) and height (`pfr`) loops, noting pragma placement and compute/dataflow interactions.
+- [x] Inspect `nnet_conv2d_resource.h` to catalogue how `parallelization_factor` currently splits work across width (`pfc`) and height (`pfr`) loops, noting pragma placement and compute/dataflow interactions.
 - [ ] Extend the Conv2DTranspose template to derive analogous `pfc/pfr` values and apply controlled unrolling or loop duplication across spatial positions, ensuring reuse-factor–driven II constraints are still enforced.
 - [ ] Refactor accumulator management so the widened parallelism does not explode local storage (e.g., tile-sized accumulators vs. global arrays) and gates unrolling only when lane count exceeds one or latency strategy is requested.
 - [ ] Rebuild the harness with representative configs (`ParallelizationFactor` 1–3, `ReuseFactor` 1 & 5) to verify synthesis stability and collect ALUT/FF deltas, keeping MAE steady.
 - [ ] Update `memory.md` with post-change measurements and carve out follow-up precision/streaming experiments if new hotspots appear.
+
+### 2025-11-03 – spatial parallelization check-in
+
+Built the spatial-parallel split directly into the Conv2DTranspose generator by mirroring Conv2D’s `pfc/pfr` factoring: the function template now divides the `parallelization_factor` between width/height tiles before assigning any residual lanes to filters, and the streaming helper was updated in lockstep. Baseline (`ParallelizationFactor=1`) reproduces the previous code path, while rerunning `./iterate.sh --agent --parallelization-factor 2` drops the Agilex7 estimate from ~95k→90k ALUTs and ~234k→205k FFs with MAE unchanged at 5.09e-3; the tool allocates a second DSP lane to cover the extra filters. Area.json confirms the reductions concentrate in the compute basic blocks rather than the pipe scaffolding, so the knob is pulling on the intended loops without inflating buffer sizes.
